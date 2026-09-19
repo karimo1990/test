@@ -1,0 +1,6 @@
+# TaskHive
+# Update the Sitemap host if the production domain differs.
+User-agent: *
+Allow: /
+
+Sitemap: https://www.taskhive.co.uk/sitemap.xml
