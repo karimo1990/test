@@ -898,6 +898,59 @@ function renderLmPrompt() {
   $('#lmDone')?.addEventListener('click', () => { A.finishLandmarks(); setTool3d('orbit'); });
 }
 
+/* ───────────────────────── AI keys (kept in this browser) ───────────────────────── */
+const KEYS_STORE = 'morph-studio.ai-keys';
+function loadKeys() { try { return JSON.parse(localStorage.getItem(KEYS_STORE) || '{}') || {}; } catch { return {}; } }
+function saveKeys(k) { try { if (k.claude || k.meshy) localStorage.setItem(KEYS_STORE, JSON.stringify(k)); else localStorage.removeItem(KEYS_STORE); } catch { /* storage blocked */ } }
+let aiKeys = loadKeys(), aiHealth = null;
+function apiHeaders(extra = {}) {
+  const h = { ...extra };
+  if (aiKeys.claude) h['x-anthropic-key'] = aiKeys.claude;
+  if (aiKeys.meshy) h['x-meshy-key'] = aiKeys.meshy;
+  return h;
+}
+function apiFetch(url, opts = {}) { return fetch(url, { ...opts, headers: apiHeaders(opts.headers || {}) }); }
+async function checkAiHealth() {
+  try { const r = await apiFetch('api/health', { method: 'POST' }); aiHealth = r.ok ? await r.json() : null; }
+  catch { aiHealth = null; }
+  renderAiBanner(); return aiHealth;
+}
+function renderAiBanner() {
+  const b = $('#apBanner'); if (!b) return;
+  const ok = aiHealth && aiHealth.claude && aiHealth.claude.ok;
+  b.hidden = false;
+  if (aiHealth === null) { b.className = 'ap-banner'; b.innerHTML = `<span>AI not connected yet — add your Claude API key so the autopilot understands notes and feedback.</span><button id="apConnect">Connect Claude</button>`; }
+  else if (ok) { b.className = 'ap-banner ok'; b.innerHTML = `<span>AI connected: ${esc(aiHealth.claude.display_name || aiHealth.claude.model)}${aiHealth.claude.source === 'server' ? ' (set on the server)' : ''}${aiHealth.meshy && aiHealth.meshy.ok ? ' · 3D generation ready' : ''}</span><button id="apConnect">AI settings</button>`; }
+  else { b.className = 'ap-banner'; b.innerHTML = `<span>${esc(aiHealth.claude.message || 'AI not connected.')} Without it the autopilot uses a basic phrase parser.</span><button id="apConnect">Connect Claude</button>`; }
+  $('#apConnect').addEventListener('click', openAiSettings);
+}
+function openAiSettings() {
+  $('#aiClaudeKey').value = aiKeys.claude || ''; $('#aiMeshyKey').value = aiKeys.meshy || '';
+  $('#aiClaudeStatus').textContent = aiHealth ? aiHealth.claude.message : ''; $('#aiClaudeStatus').className = 'ai-status' + (aiHealth && aiHealth.claude.ok ? ' ok' : '');
+  $('#aiMeshyStatus').textContent = aiHealth ? aiHealth.meshy.message : ''; $('#aiMeshyStatus').className = 'ai-status' + (aiHealth && aiHealth.meshy.ok ? ' ok' : '');
+  $('#aiModal').hidden = false; $('#aiClaudeKey').focus();
+}
+$('#btnAI').addEventListener('click', openAiSettings);
+$('#aiClose').addEventListener('click', () => { $('#aiModal').hidden = true; });
+$('#aiModal').addEventListener('click', e => { if (e.target === $('#aiModal')) $('#aiModal').hidden = true; });
+$('#aiShow').addEventListener('click', () => { const i = $('#aiClaudeKey'); i.type = i.type === 'password' ? 'text' : 'password'; });
+$('#aiRemove').addEventListener('click', () => { aiKeys = {}; saveKeys(aiKeys); $('#aiClaudeKey').value = ''; $('#aiMeshyKey').value = ''; checkAiHealth(); $('#aiClaudeStatus').textContent = 'Keys removed from this browser.'; $('#aiClaudeStatus').className = 'ai-status'; $('#aiMeshyStatus').textContent = ''; });
+$('#aiTest').addEventListener('click', async () => {
+  const claude = $('#aiClaudeKey').value.trim(), meshy = $('#aiMeshyKey').value.trim();
+  if (claude && !/^sk-ant-/.test(claude)) { $('#aiClaudeStatus').textContent = 'A Claude API key starts with "sk-ant-". Please check it.'; $('#aiClaudeStatus').className = 'ai-status bad'; return; }
+  aiKeys = { claude, meshy }; saveKeys(aiKeys);
+  $('#aiTest').disabled = true; $('#aiClaudeStatus').textContent = 'Testing…'; $('#aiClaudeStatus').className = 'ai-status'; $('#aiMeshyStatus').textContent = meshy ? 'Testing…' : ''; $('#aiMeshyStatus').className = 'ai-status';
+  const h = await checkAiHealth();
+  $('#aiTest').disabled = false;
+  if (!h) { $('#aiClaudeStatus').textContent = 'Could not reach the app server to test the key. Is the app running from its hosted address?'; $('#aiClaudeStatus').className = 'ai-status bad'; return; }
+  $('#aiClaudeStatus').textContent = h.claude.message; $('#aiClaudeStatus').className = 'ai-status ' + (h.claude.ok ? 'ok' : h.claude.configured ? 'bad' : '');
+  $('#aiMeshyStatus').textContent = h.meshy.message; $('#aiMeshyStatus').className = 'ai-status ' + (h.meshy.ok ? 'ok' : h.meshy.configured ? 'bad' : '');
+  if (h.claude.ok) setStatus(`AI connected: ${h.claude.display_name || h.claude.model}`);
+});
+window.MorphAPI.apiFetch = apiFetch;
+window.MorphAPI.aiReady = () => !!(aiHealth && aiHealth.claude && aiHealth.claude.ok);
+setTimeout(checkAiHealth, 800);
+
 /* ───────────────────────── Versions ("Morph 1", "Morph 2"…) ───────────────────────── */
 function renderWithDisp(v, dx, dy) {
   const c = document.createElement('canvas'); c.width = v.W; c.height = v.H;
@@ -1406,7 +1459,7 @@ function genUI(on, pct, text) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function postJSON(url, data) {
-  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+  const r = await apiFetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
   let body = null; const ct = r.headers.get('content-type') || '';
   if (ct.includes('application/json')) body = await r.json().catch(() => null);
   return { ok: r.ok, status: r.status, body, raw: r };
@@ -1420,7 +1473,7 @@ async function generateModel() {
   const image = view.before.toDataURL('image/jpeg', 0.92);
   try {
     const start = await postJSON('api/generate3d', { action: 'start', image });
-    if (start.status === 503) { genUI(false); alert('AI 3D generation is not enabled on this deployment yet.\n\nAdd a MESHY_API_KEY environment variable in the Vercel project (Settings → Environment Variables) and redeploy. Until then you can generate the model on the provider\'s website and use “Load 3D model file…”.'); return; }
+    if (start.status === 503) { genUI(false); alert('AI 3D generation needs a Meshy API key.\n\nOpen “AI settings” (top bar) and paste a Meshy API key from meshy.ai → API, then try again. An administrator can also set MESHY_API_KEY on the server.'); openAiSettings(); return; }
     if (!start.ok) throw new Error((start.body && start.body.message) || `Could not start generation (${start.status}).`);
     const taskId = start.body.task_id; genJob = { taskId, cancelled: false };
     let glbUrl = null;

@@ -4,6 +4,7 @@
 // Requires ANTHROPIC_API_KEY in the deployment's environment variables; without it the
 // endpoint answers 503 and the app falls back to its built-in phrase parser.
 import Anthropic from '@anthropic-ai/sdk';
+import { anthropicKey } from './_keys.js';
 
 const MODEL = process.env.AUTOPILOT_MODEL || 'claude-opus-5';
 const TARGETS = ['dorsum', 'radix', 'tip', 'supratip', 'alar_base', 'nasal_bridge', 'columella', 'chin', 'jawline', 'cheeks', 'lips', 'lip_upper', 'lip_lower', 'brow', 'forehead', 'nasolabial_fold', 'neck'];
@@ -55,7 +56,8 @@ How to plan:
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'method_not_allowed' }); }
-  if (!process.env.ANTHROPIC_API_KEY) return res.status(503).json({ error: 'no_key', message: 'ANTHROPIC_API_KEY is not configured on the server.' });
+  const ak = anthropicKey(req);
+  if (!ak.key) return res.status(503).json({ error: 'no_key', message: 'No Claude API key: add it under AI settings in the app, or set ANTHROPIC_API_KEY on the server.' });
   let body = req.body;
   try { if (typeof body === 'string') body = JSON.parse(body); } catch { return res.status(400).json({ error: 'bad_json' }); }
   const message = String(body?.message || '').slice(0, 4000);
@@ -77,7 +79,7 @@ export default async function handler(req, res) {
   while (history.length && history[history.length - 1].role === 'assistant') history.pop();
   const messages = [...history, { role: 'user', content: `<context>\n${contextText}\n</context>\n\nLatest message: ${message}` }];
 
-  const client = new Anthropic();
+  const client = new Anthropic({ apiKey: ak.key });
   try {
     const response = await client.messages.create({
       model: MODEL,
@@ -94,6 +96,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ reply: String(input.reply || ''), ops, questions: Array.isArray(input.questions) ? input.questions.slice(0, 1) : [], engine: MODEL });
   } catch (err) {
     const status = err?.status && err.status >= 400 && err.status < 600 ? err.status : 502;
-    return res.status(status === 401 || status === 403 ? 503 : 502).json({ error: 'upstream', message: String(err?.message || err).slice(0, 300) });
+    if (status === 401 || status === 403) return res.status(503).json({ error: 'bad_key', message: 'The Claude API key was rejected. Check it under AI settings.' });
+    return res.status(502).json({ error: 'upstream', message: String(err?.message || err).slice(0, 300) });
   }
 }

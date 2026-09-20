@@ -2,6 +2,7 @@
 // Used only when the browser cannot read the text itself (scanned PDF, image). Returns the
 // text verbatim so the autopilot can plan from it. Requires ANTHROPIC_API_KEY.
 import Anthropic from '@anthropic-ai/sdk';
+import { anthropicKey } from './_keys.js';
 
 const MODEL = process.env.EXTRACT_MODEL || process.env.AUTOPILOT_MODEL || 'claude-opus-5';
 const MAX_BYTES = 20 * 1024 * 1024;
@@ -9,7 +10,8 @@ const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'method_not_allowed' }); }
-  if (!process.env.ANTHROPIC_API_KEY) return res.status(503).json({ error: 'no_key', message: 'ANTHROPIC_API_KEY is not configured on the server.' });
+  const ak = anthropicKey(req);
+  if (!ak.key) return res.status(503).json({ error: 'no_key', message: 'No Claude API key: add it under AI settings in the app, or set ANTHROPIC_API_KEY on the server.' });
   let body = req.body;
   try { if (typeof body === 'string') body = JSON.parse(body); } catch { return res.status(400).json({ error: 'bad_json' }); }
   const data = String(body?.data || ''), m = data.match(/^data:([^;]+);base64,(.+)$/s);
@@ -21,7 +23,7 @@ export default async function handler(req, res) {
   else if (IMAGE_TYPES.includes(mediaType)) block = { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } };
   else return res.status(415).json({ error: 'unsupported', message: 'Only PDF and JPEG/PNG/GIF/WebP images are transcribed here.' });
 
-  const client = new Anthropic();
+  const client = new Anthropic({ apiKey: ak.key });
   try {
     const response = await client.messages.create({
       model: MODEL,

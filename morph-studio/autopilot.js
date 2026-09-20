@@ -295,8 +295,8 @@ async function askServer(userText, isDocument) {
     measurements: A && A.measures ? A.measures.map((m, i) => { const v = A.measureValues(i); return v ? `#${i + 1}: before ${v.before.toFixed(1)} mm, now ${v.after.toFixed(1)} mm` : ''; }).filter(Boolean) : [],
   };
   const history = chat.messages.filter(m => m.role !== 'system').slice(-12).map(m => ({ role: m.role, content: m.text }));
-  const res = await fetch('api/autopilot', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: userText, history, context: { ...context, is_document: !!isDocument } }) });
-  if (res.status === 503) return null; // no key configured → offline parser
+  const res = await (window.MorphAPI.apiFetch || fetch)('api/autopilot', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: userText, history, context: { ...context, is_document: !!isDocument } }) });
+  if (res.status === 503) { const b = await res.json().catch(() => ({})); chat.noKeyMessage = b.message || ''; return null; } // no key → offline parser
   if (!res.ok) throw new Error(`AI service error (${res.status})`);
   return res.json();
 }
@@ -312,7 +312,7 @@ async function handle(userText, source) {
     let ops, reply;
     if (plan && Array.isArray(plan.ops)) { ops = plan.ops.map(normaliseOp).filter(Boolean); reply = plan.reply || ''; chat.engine = plan.engine || 'Claude'; if (plan.questions && plan.questions.length) reply += (reply ? '\n' : '') + plan.questions.join('\n'); }
     else {
-      chat.engine = chat.engine || 'built-in parser (no AI key configured on the server)';
+      chat.engine = chat.engine || 'built-in parser — connect Claude in AI settings for full understanding';
       ops = parseRelative(text, chat.steps) || parseLocal(text).ops; reply = '';
     }
     if (!ops.length) { add('assistant', reply || 'I could not find a change to make in that. Try something like “reduce the dorsal hump by 2 mm”, “rotate the tip up 5°”, “narrow the alar base 3 mm”, “augment the chin 4 mm”, or “a bit less on the tip”.'); return; }

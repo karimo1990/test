@@ -75,7 +75,7 @@ async function extractPdf(bytes) {
 }
 /* ── Server (Claude vision) for scans and photos ── */
 async function extractViaServer(doc) {
-  const r = await fetch('api/extract', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: doc.name, type: doc.type, data: doc.data }) });
+  const r = await ((window.MorphAPI && window.MorphAPI.apiFetch) || fetch)('api/extract', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: doc.name, type: doc.type, data: doc.data }) });
   if (r.status === 503) return { unavailable: true };
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.message || `Extraction service error (${r.status})`);
@@ -92,12 +92,12 @@ export async function extractText(doc) {
     try { local = await extractPdf(dataUrlToBytes(doc.data)); } catch (e) { local = null; }
     if (local && local.text.length >= PDF_MIN_CHARS) return { text: local.text, method: `pdf (${local.pages} page${local.pages > 1 ? 's' : ''})` };
     const srv = await extractViaServer(doc);
-    if (srv.unavailable) return { text: local ? local.text : '', method: 'pdf', warning: 'This PDF looks scanned (no text layer). Reading scans needs the AI service: add ANTHROPIC_API_KEY on the server, or upload the notes as a Word or text file.' };
+    if (srv.unavailable) return { text: local ? local.text : '', method: 'pdf', warning: 'This PDF looks scanned (no text layer). Reading scans needs the Claude AI: add your key under AI settings, or upload the notes as a Word or text file.' };
     return { text: srv.text, method: 'scan (AI transcription)' };
   }
   if (kind === 'image') {
     const srv = await extractViaServer(doc);
-    if (srv.unavailable) return { text: '', method: 'image', warning: 'Reading a photo of notes needs the AI service: add ANTHROPIC_API_KEY on the server, or upload the notes as a PDF, Word or text file.' };
+    if (srv.unavailable) return { text: '', method: 'image', warning: 'Reading a photo of notes needs the Claude AI: add your key under AI settings, or upload the notes as a PDF, Word or text file.' };
     return { text: srv.text, method: 'photo (AI transcription)' };
   }
   return { text: '', method: 'unsupported', warning: 'This file type cannot be read. Use PDF, Word (.docx), text or an image.' };

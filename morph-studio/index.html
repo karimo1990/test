@@ -20,6 +20,7 @@
   </div>
   <div class="status" id="status">Runs entirely on this device — photos are never uploaded.</div>
   <div class="topbar-actions">
+    <button id="btnAI" title="Connect the Claude AI (and optionally the 3D generator)">AI settings</button>
     <button id="btnNew" title="Start a new, empty case">New case</button>
     <button id="btnOpen" title="Open a saved case file (.json)">Open…</button>
     <button id="btnSave" title="Download this case as a file you can reopen later">Save case</button>
@@ -185,6 +186,7 @@
   <aside class="panel notes">
     <h3>AI autopilot <span class="count" id="apEngine"></span></h3>
     <div class="ap">
+      <div class="ap-banner" id="apBanner" hidden></div>
       <div class="ap-log" id="apLog"></div>
       <div class="ap-status" id="apStatus"></div>
       <textarea id="apInput" rows="2" placeholder="e.g. Reduce the dorsal hump by 2 mm and rotate the tip up 5°. Or patient feedback: the tip looks too upturned — a bit less."></textarea>
@@ -292,6 +294,25 @@
 <input type="file" id="fileModel" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden>
 <input type="file" id="fileNotes" accept=".pdf,.docx,.txt,.md,.rtf,image/*,application/pdf" hidden>
 <input type="file" id="fileDocs" multiple accept=".pdf,.doc,.docx,.odt,.rtf,.txt,.md,image/*,application/pdf,text/plain" hidden>
+<div class="modal" id="aiModal" hidden>
+  <div class="modal-card ai-card">
+    <h2>AI settings</h2>
+    <p class="hint">The platform's AI (autopilot, reading notes) runs on Claude. Paste your Claude API key once; it is kept in this browser only and sent to this app's own server functions with each AI request. Get a key at <strong>console.anthropic.com</strong> → API keys.</p>
+    <label for="aiClaudeKey">Claude API key</label>
+    <div class="row keyrow"><input id="aiClaudeKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…"><button id="aiShow" type="button" title="Show / hide">👁</button></div>
+    <div class="ai-status" id="aiClaudeStatus"></div>
+    <label for="aiMeshyKey">Meshy API key <span class="count">(optional — only for generating the patient's 3D model)</span></label>
+    <div class="row keyrow"><input id="aiMeshyKey" type="password" autocomplete="off" spellcheck="false" placeholder="from meshy.ai → API"></div>
+    <div class="ai-status" id="aiMeshyStatus"></div>
+    <p class="hint">For a clinic-wide setup an administrator can instead set <code>ANTHROPIC_API_KEY</code> and <code>MESHY_API_KEY</code> in the Vercel project's environment variables; keys set there take priority and nothing needs to be entered here.</p>
+    <div class="modal-row">
+      <button id="aiRemove" class="danger">Remove keys from this browser</button>
+      <span class="spacer"></span>
+      <button id="aiClose">Close</button>
+      <button id="aiTest" class="primary">Test &amp; save</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="docModal" hidden>
   <div class="modal-card doc-card">
     <div class="doc-head"><h2 id="docTitle">Document</h2><span class="spacer"></span><a id="docDownload" class="btn-link" download>Download</a><button id="docClose">Close</button></div>

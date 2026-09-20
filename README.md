@@ -232,11 +232,17 @@ downloads a labelled before/after PNG. *Save case* downloads a `.json` file (inc
 3D model and documents) that can be reopened later; the current case is also kept in the
 browser (IndexedDB) so an accidental refresh loses nothing.
 
-**Deployment** — static files plus two Vercel serverless functions (`api/`). Environment
-variables on the Vercel project: `ANTHROPIC_API_KEY` (autopilot language understanding,
-optional), `MESHY_API_KEY` (AI 3D generation, optional), `AUTOPILOT_MODEL`, `MESHY_MODEL`,
-`MESHY_POLYCOUNT` (optional overrides). `build.sh` is the Vercel build command; it fetches
-this branch from GitHub into `public/`.
+**Connecting the AI** — click *AI settings* in the top bar and paste a Claude API key
+(console.anthropic.com → API keys); *Test & save* confirms the connection. The key is kept in
+that browser only and travels with each AI request to the app's own serverless functions,
+which never store it. A Meshy key can be added the same way for AI 3D generation. For a
+clinic-wide setup an administrator can instead set `ANTHROPIC_API_KEY` / `MESHY_API_KEY` in
+the Vercel project's environment variables; those take priority.
+
+**Deployment** — static files plus Vercel serverless functions in `api/` (`autopilot`,
+`extract`, `generate3d`, `health`). Optional overrides: `AUTOPILOT_MODEL`, `EXTRACT_MODEL`,
+`MESHY_MODEL`, `MESHY_POLYCOUNT`. `build.sh` is the Vercel build command; it fetches this
+branch from GitHub into `public/`.
 
 Files: `index.html`, `styles.css`, `app.js` (2D warp engine, notes, save/print/export),
 `avatar.js` (3D model loading, generic head, texture projection, sculpting, landmarks,

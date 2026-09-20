@@ -3,11 +3,14 @@
 // The browser posts the photo here; this function starts the task, reports progress and hands
 // back the finished GLB. Requires MESHY_API_KEY in the deployment's environment variables;
 // without it the endpoint answers 503 and the app explains how to enable the feature.
+import { meshyKey } from './_keys.js';
+
 const MESHY = 'https://api.meshy.ai/openapi/v1/image-to-3d';
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;   // base64 data URI size accepted from the browser
 const MAX_PROXY_BYTES = 4 * 1024 * 1024;    // Vercel function response limit is ~4.5 MB
 
-const headers = () => ({ Authorization: `Bearer ${process.env.MESHY_API_KEY}`, 'Content-Type': 'application/json' });
+let currentKey = '';
+const headers = () => ({ Authorization: `Bearer ${currentKey}`, 'Content-Type': 'application/json' });
 
 async function startTask(imageDataUri) {
   const body = {
@@ -38,7 +41,9 @@ const normaliseStatus = s => ({ PENDING: 'pending', IN_PROGRESS: 'running', SUCC
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'method_not_allowed' }); }
-  if (!process.env.MESHY_API_KEY) return res.status(503).json({ error: 'no_key', message: 'MESHY_API_KEY is not configured on the server.' });
+  const mk = meshyKey(req);
+  if (!mk.key) return res.status(503).json({ error: 'no_key', message: 'No Meshy API key: add it under AI settings in the app, or set MESHY_API_KEY on the server.' });
+  currentKey = mk.key;
   let body = req.body;
   try { if (typeof body === 'string') body = JSON.parse(body); } catch { return res.status(400).json({ error: 'bad_json' }); }
   const action = body?.action;
