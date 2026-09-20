@@ -883,9 +883,10 @@ function rebuildLandmarkSprites() {
   for (const name of LANDMARK_NAMES) {
     if (!A.landmarks[name]) continue;
     const short = { pupil_r: 'R pupil', pupil_l: 'L pupil', nasion: 'Nasion', rhinion: 'Rhinion', pronasale: 'Tip', subnasale: 'Subnasale', pogonion: 'Chin' }[name];
-    const { t, w } = labelTexture('● ' + short);
+    const { t, w } = labelTexture(name.endsWith('_r') ? short + ' ●' : '● ' + short);
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true }));
-    s.scale.set(0.0026 * w, 0.0026 * 44, 1); s.renderOrder = 22; s.userData.name = name; s.center.set(0.08, 0.5);
+    s.scale.set(0.0017 * w, 0.0017 * 44, 1); s.renderOrder = 22; s.userData.name = name; s.center.set(0.05, name.endsWith('_r') ? 0.5 : name === 'pronasale' || name === 'nasion' ? 0.5 : 0.5);
+    if (name.endsWith('_r')) s.center.set(0.95, 0.5); // right-side labels hang to the left of the point
     landmarkGroup.add(s); landmarkSprites.push(s);
   }
 }
