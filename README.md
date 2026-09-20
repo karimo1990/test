@@ -176,7 +176,8 @@ the accordion.
 
 A separate, self-contained tool for facial surgeons: a before / after simulation aid for
 rhinoplasty and similar procedures, used during consultation to set expectations.
-Open `morph-studio/index.html` in a modern browser (Chrome, Edge, Safari, Firefox; works on
+Live at **https://morph-studio-two.vercel.app** (Vercel, built from this branch), or open
+`morph-studio/index.html` locally in a modern browser (Chrome, Edge, Safari, Firefox; works on
 an iPad). Nothing is uploaded anywhere — photos, edits and notes stay on the device.
 
 **Photo morph** — upload the patient's photos (front, profiles), then sculpt the planned
