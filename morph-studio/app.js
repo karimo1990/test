@@ -77,6 +77,7 @@ async function ensureAvatar() {
     A.onPins = focus => { if (is3d()) { renderPinList(); if (focus) focusPin(A.selectedPin); } };
     A.onModel = () => { renderModelPanel(); renderRoleSelects(); updateBrushLabel(); };
     A.onMeasure = () => renderMeasures();
+    A.onLandmarks = () => { renderApLandmarks(); renderLmPrompt(); };
     A.init(el.stage);
     A.brush = +el.brush3d.value / 100; A.strength = state.strength / 100; A.symmetry = el.symmetry.checked;
     renderModelPanel(); renderMeasures(); updateBrushLabel();
@@ -109,6 +110,7 @@ function createView(name, image) {
     out: actx.getImageData(0, 0, W, H),
     dx: new Float32Array(W * H), dy: new Float32Array(W * H),
     pins: [], history: [], redo: [], preStroke: null, strokeBox: null,
+    landmarks: null, kind: '', mm: 0,
   };
 }
 
@@ -142,9 +144,9 @@ const renderAll = (v, t = 1) => renderRegion(v, 0, 0, v.W, v.H, t);
 
 /* One brush application. (mx,my) is the pointer movement for the push tool.
    Content moved by v means new D(p) = D_old(p - v) - v, so strokes compose correctly. */
-function dab(v, cx, cy, mx, my) {
+function dab(v, cx, cy, mx, my, opts) {
   const { W, H, dx, dy } = v;
-  const r = state.brush, r2 = r * r, k = state.strength / 100, tool = state.tool;
+  const r = opts && opts.r ? opts.r : state.brush, r2 = r * r, k = opts && opts.k != null ? opts.k : state.strength / 100, tool = opts && opts.tool ? opts.tool : state.tool;
   const x0 = Math.max(0, Math.floor(cx - r)), y0 = Math.max(0, Math.floor(cy - r));
   const x1 = Math.min(W - 1, Math.ceil(cx + r)), y1 = Math.min(H - 1, Math.ceil(cy + r));
   if (x1 < x0 || y1 < y0) return;
@@ -298,7 +300,7 @@ function draw() {
     ctx.save(); ctx.beginPath(); ctx.rect(sx, 0, W - sx, H); ctx.clip(); ctx.drawImage(v.after, 0, 0); ctx.restore();
     labels.push(['Before', 0, 'left'], ['Simulated', W, 'right']);
   }
-  if (!state.showBefore) drawPins(v);
+  if (!state.showBefore) { drawPins(v); if (state.tool === 'landmarks' && v.landmarks) drawLandmarks(v); }
   ctx.restore();
 
   // Labels in screen space
@@ -341,7 +343,7 @@ function drawPins(v) {
 
 /* ───────────────────────── Pointer input ───────────────────────── */
 const pointers = new Map();
-let stroke = null, panDrag = null, pinDrag = null, pinch = null, spaceHeld = false, anim = false;
+let stroke = null, panDrag = null, pinDrag = null, lmDrag = null, pinch = null, spaceHeld = false, anim = false;
 const isPaintTool = () => ['push', 'shrink', 'expand', 'restore'].includes(state.tool);
 
 function toImage(e) {
@@ -374,6 +376,12 @@ function onDown(e) {
     return;
   }
   if (e.button !== 0) return;
+  if (state.tool === 'landmarks') {
+    if (!v.landmarks) ensureLandmarks(v);
+    const hit = hitLandmark(v, p);
+    if (hit) { lmDrag = { name: hit }; e.preventDefault(); }
+    return;
+  }
   if (state.tool === 'annotate') {
     e.preventDefault(); // keep focus on the note field we are about to open
     const hit = hitPin(v, p);
@@ -421,6 +429,7 @@ function onMove(e) {
     v.pins[pinDrag.i].x = clamp(p.x, 0, v.W); v.pins[pinDrag.i].y = clamp(p.y, 0, v.H);
     draw(); return;
   }
+  if (lmDrag) { v.landmarks[lmDrag.name] = { x: clamp(p.x, 0, v.W), y: clamp(p.y, 0, v.H) }; draw(); return; }
   if (stroke) {
     if (state.tool === 'push') {
       let events = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
@@ -438,6 +447,7 @@ function onUp(e) {
   if (pinch && pointers.size < 2) pinch = null;
   if (panDrag) panDrag = null;
   if (pinDrag) { pinDrag = null; markDirty(); }
+  if (lmDrag) { lmDrag = null; markDirty(); renderApLandmarks(); }
   if (stroke) endStroke();
 }
 function endStroke() {
@@ -485,12 +495,14 @@ function setTool(t) {
   state.tool = t;
   $$('#toolGrid button').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
   el.canvas.style.cursor = isPaintTool() ? 'none' : t === 'hand' ? 'grab' : 'crosshair';
+  if (t === 'landmarks') { const v = currentView(); if (v && !v.landmarks) { ensureLandmarks(v); markDirty(); } renderApLandmarks(); }
   draw();
 }
 $('#toolGrid').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setTool(b.dataset.tool); });
 function setTool3d(t) {
   $$('#toolGrid3d button').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
-  if (avatarInited) AV().setTool(t);
+  if (avatarInited) { AV().setTool(t); if (t === 'landmark' && AV().landmarkStep < 0 && !AV().landmarksReady()) AV().startLandmarks(); }
+  renderLmPrompt();
 }
 $('#toolGrid3d').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setTool3d(b.dataset.tool); });
 function updateBrushLabel() { const units = +el.brush3d.value / 100; el.brush3dVal.textContent = avatarInited ? `${Math.round(units * AV().mmPerUnit)} mm` : el.brush3d.value; }
@@ -566,6 +578,7 @@ document.addEventListener('keydown', e => {
     case 'a': case 'A': is3d() ? setTool3d('note') : setTool('annotate'); break;
     case 'd': case 'D': if (is3d()) setTool3d('measure'); break;
     case 'h': case 'H': is3d() ? setTool3d('orbit') : setTool('hand'); break;
+    case 'l': case 'L': if (is3d()) { if (avatarInited) { setTool3d('landmark'); AV().startLandmarks(); } } else setTool('landmarks'); break;
     case 'f': case 'F': $('#btnFit').click(); break;
     case '[': { const r = is3d() ? el.brush3d : el.brush; r.value = +r.value - (is3d() ? 2 : 5); r.dispatchEvent(new Event('input')); break; }
     case ']': { const r = is3d() ? el.brush3d : el.brush; r.value = +r.value + (is3d() ? 2 : 5); r.dispatchEvent(new Event('input')); break; }
@@ -679,7 +692,7 @@ function selectView(i) {
   state.current = i; state.selectedPin = -1;
   const v = currentView();
   if (v) { setMorph(1, false); renderAll(v); }
-  renderTabs(); renderPinList(); updateHistoryButtons(); fit();
+  renderTabs(); renderPinList(); updateHistoryButtons(); fit(); renderApLandmarks();
 }
 function removeView(i) {
   const v = state.views[i];
@@ -719,7 +732,7 @@ async function addPhotos(files) {
     } catch (err) { alert(err.message); }
   }
   state.current = state.views.length - 1; state.selectedPin = -1;
-  renderTabs(); renderPinList(); updateHistoryButtons(); fit(); markDirty();
+  renderTabs(); renderPinList(); updateHistoryButtons(); fit(); markDirty(); renderApLandmarks();
   setStatus(`${list.length} photo${list.length > 1 ? 's' : ''} added`);
   if (avatarInited) autoAssignRoles();
 }
@@ -750,6 +763,137 @@ function syncFields() {
   el.nPlan.value = state.notes.plan; el.nConsult.value = state.notes.consultation; el.nDisclaimer.value = state.notes.disclaimer;
 }
 const procedureLabel = () => (state.patient.procedure === 'Other' && state.patient.other.trim()) ? state.patient.other.trim() : state.patient.procedure;
+
+/* ───────────────────────── Landmarks, scale and autopilot support (2D) ───────────────────────── */
+const LM_NAMES = ['pupil_r', 'pupil_l', 'nasion', 'rhinion', 'pronasale', 'subnasale', 'pogonion'];
+const LM_SHORT = { pupil_r: 'R pupil', pupil_l: 'L pupil', nasion: 'Nasion', rhinion: 'Rhinion', pronasale: 'Tip', subnasale: 'Subnasale', pogonion: 'Chin' };
+// Template positions in mm relative to the nasion: [lateral towards patient's left, down, anterior]
+const LM_TEMPLATE = { pupil_r: [-31.5, 0, 0], pupil_l: [31.5, 0, 0], nasion: [0, 0, 0], rhinion: [0, 14, 8], pronasale: [0, 30, 24], subnasale: [0, 42, 12], pogonion: [0, 95, 6] };
+function viewKind(v) {
+  if (v.kind === 'front' || v.kind === 'profile' || v.kind === 'other') return v.kind;
+  if (/front|face|ap\b|frontal/i.test(v.name)) return 'front';
+  if (/profile|side|lateral|\bl\b|\br\b|left|right/i.test(v.name)) return 'profile';
+  return 'other';
+}
+function viewPxPerMm(v) {
+  const lm = v.landmarks; if (!lm) return 0;
+  const kind = viewKind(v);
+  if (kind === 'front') { if (!lm.pupil_l || !lm.pupil_r) return 0; return Math.hypot(lm.pupil_l.x - lm.pupil_r.x, lm.pupil_l.y - lm.pupil_r.y) / (v.mm || 63); }
+  if (!lm.nasion || !lm.pogonion) return 0;
+  return Math.hypot(lm.nasion.x - lm.pogonion.x, lm.nasion.y - lm.pogonion.y) / (v.mm || 108);
+}
+function ensureLandmarks(v) {
+  if (v.landmarks) return;
+  const kind = viewKind(v); const lm = {};
+  // Start from the 3D alignment if the surgeon has set one, else from a centred face.
+  const al = avatarInited && AV().photos.front === v ? AV().getAlign('front') : null;
+  const cx = al ? al.cx : v.W / 2, nasionY = al ? al.cy - 0.2 * al.s : v.H * 0.42, pxPerMm = al ? al.s / 117 : v.W / 200;
+  const noseDir = /left|\bl\b/i.test(v.name) ? -1 : 1;  // a left profile shows the nose pointing left
+  for (const n of LM_NAMES) {
+    const [lat, down, ant] = LM_TEMPLATE[n];
+    if (kind === 'profile') { if (n === 'pupil_r') continue; lm[n] = { x: cx + (n === 'pupil_l' ? -14 : ant) * pxPerMm * noseDir, y: nasionY + down * pxPerMm }; }
+    else lm[n] = { x: cx + lat * pxPerMm, y: nasionY + down * pxPerMm };
+  }
+  v.landmarks = lm; v.kind = v.kind || kind; if (!v.mm) v.mm = kind === 'front' ? 63 : 108;
+}
+function hitLandmark(v, p) {
+  const r = 14 / state.zoom; let best = null, bd = Infinity;
+  for (const [n, q] of Object.entries(v.landmarks)) { const d = Math.hypot(q.x - p.x, q.y - p.y); if (d <= r && d < bd) { bd = d; best = n; } }
+  return best;
+}
+function drawLandmarks(v) {
+  const z = state.zoom, off = afterOffset(v), r = 6 / z;
+  ctx.font = `600 ${11 / z}px ${getComputedStyle(document.body).fontFamily}`; ctx.textBaseline = 'middle';
+  for (const [n, q] of Object.entries(v.landmarks)) {
+    ctx.beginPath(); ctx.arc(q.x + off, q.y, r, 0, Math.PI * 2); ctx.fillStyle = '#ffd166'; ctx.fill(); ctx.lineWidth = 1.5 / z; ctx.strokeStyle = '#3a2a00'; ctx.stroke();
+    const label = LM_SHORT[n], tw = ctx.measureText(label).width + 8 / z;
+    ctx.fillStyle = 'rgba(22,33,46,.8)'; ctx.fillRect(q.x + off + r + 3 / z, q.y - 8 / z, tw, 16 / z);
+    ctx.fillStyle = '#fff'; ctx.fillText(label, q.x + off + r + 7 / z, q.y);
+  }
+  const lm = v.landmarks, k = viewKind(v);
+  const pairs = k === 'front' ? [['pupil_r', 'pupil_l']] : [['nasion', 'pogonion']];
+  for (const [a, b] of pairs) if (lm[a] && lm[b]) { ctx.beginPath(); ctx.moveTo(lm[a].x + off, lm[a].y); ctx.lineTo(lm[b].x + off, lm[b].y); ctx.setLineDash([4 / z, 4 / z]); ctx.strokeStyle = 'rgba(255,209,102,.9)'; ctx.lineWidth = 1 / z; ctx.stroke(); ctx.setLineDash([]); }
+  ctx.textBaseline = 'alphabetic';
+}
+/* Apply autopilot pushes on a photo: { x, y, vx, vy, px, radiusPx, mode: move|bloat|pucker } — one undo step. */
+function applyPushes2D(v, pushes) {
+  if (!pushes.length) return;
+  if (state.morph < 1 && v === currentView()) setMorph(1, true);
+  let box = null;
+  const grow = (x0, y0, x1, y1) => { x0 = Math.max(0, Math.floor(x0)); y0 = Math.max(0, Math.floor(y0)); x1 = Math.min(v.W - 1, Math.ceil(x1)); y1 = Math.min(v.H - 1, Math.ceil(y1)); if (x1 < x0 || y1 < y0) return; box = box ? { x0: Math.min(box.x0, x0), y0: Math.min(box.y0, y0), x1: Math.max(box.x1, x1), y1: Math.max(box.y1, y1) } : { x0, y0, x1, y1 }; };
+  for (const p of pushes) grow(p.x - p.radiusPx - Math.abs(p.px) - 2, p.y - p.radiusPx - Math.abs(p.px) - 2, p.x + p.radiusPx + Math.abs(p.px) + 2, p.y + p.radiusPx + Math.abs(p.px) + 2);
+  if (!box) return;
+  const before = { b: { ...box }, dx: copyRegion(v.dx, v.W, box), dy: copyRegion(v.dy, v.W, box) };
+  for (const p of pushes) {
+    const r = Math.max(4, p.radiusPx);
+    if (p.mode === 'move') {
+      const len = Math.hypot(p.vx, p.vy) || 1, ux = p.vx / len, uy = p.vy / len, total = p.px;
+      const steps = Math.max(1, Math.ceil(Math.abs(total) / Math.max(1.5, r * 0.15)));
+      for (let i = 1; i <= steps; i++) { const t = total / steps; dab(v, p.x + ux * t * (i - 0.5), p.y + uy * t * (i - 0.5), ux * t, uy * t, { tool: 'push', r, k: 1 }); }
+    } else {
+      // radial: each tick scales the region; a point at r/2 moves ~ r/2 * 0.03 * 0.5625 per tick
+      const perTick = (r / 2) * 0.03 * 0.5625, ticks = Math.min(400, Math.max(1, Math.round(Math.abs(p.px) / perTick)));
+      for (let i = 0; i < ticks; i++) dab(v, p.x, p.y, 0, 0, { tool: p.mode === 'bloat' ? 'expand' : 'shrink', r, k: 1 });
+    }
+  }
+  v.history.push(before); if (v.history.length > HISTORY_LIMIT) v.history.shift(); v.redo = [];
+  renderRegion(v, box.x0, box.y0, box.x1 + 1, box.y1 + 1, 1);
+  if (v === currentView()) { updateHistoryButtons(); draw(); }
+  markDirty();
+}
+window.MorphAPI = {
+  views: () => state.views.slice(),
+  viewInfo: v => ({ kind: viewKind(v), pxPerMm: viewPxPerMm(v), mm: v.mm }),
+  applyPushes2D, undoView: v => { if (!v.history.length) return; const s = v.history.pop(); v.redo.push(snapshot(v, s.b)); applySnapshot(v, s); if (v === currentView()) { updateHistoryButtons(); draw(); } markDirty(); },
+  notes: () => ({ plan: state.notes.plan, consultation: state.notes.consultation }),
+  procedure: () => procedureLabel(),
+  markDirty, setStatus,
+  saveChat: msgs => { state.chat = msgs; },
+  loadChat: () => {},
+};
+/* Landmark status panel inside the autopilot box */
+function renderApLandmarks() {
+  const box = $('#apLandmarks'); if (!box) return;
+  const rows = [];
+  if (avatarInited && AV().model) {
+    const A = AV(), ready = A.landmarksReady();
+    rows.push(`<div class="lmrow"><span>3D model:</span> <span class="${ready ? 'ok' : 'todo'}">${ready ? 'landmarks set' : 'landmarks needed'}</span>
+      <button id="apLm3d">${ready ? 'Check / adjust landmarks' : 'Set landmarks'}</button>
+      <label class="check inline"><input type="checkbox" id="apShowLm" ${A.showLandmarks ? 'checked' : ''}> show</label></div>`);
+  }
+  const v = currentView();
+  if (v) {
+    const kind = viewKind(v), has = !!v.landmarks;
+    rows.push(`<div class="lmrow"><span>Photo “${esc(v.name)}”:</span>
+      <select id="apKind"><option value="front" ${kind === 'front' ? 'selected' : ''}>front view</option><option value="profile" ${kind === 'profile' ? 'selected' : ''}>profile view</option><option value="other" ${kind === 'other' ? 'selected' : ''}>other (not editable by AI)</option></select>
+      <span class="${has ? 'ok' : 'todo'}">${has ? 'landmarks set' : 'landmarks needed'}</span>
+      <button id="apLm2d">${has ? 'Adjust landmarks' : 'Place landmarks'}</button>
+      ${kind === 'other' ? '' : `<label class="inline">${kind === 'front' ? 'pupil distance' : 'nasion–chin'} <input type="number" id="apMm" min="20" max="200" value="${v.mm || (kind === 'front' ? 63 : 108)}"> mm</label>`}
+      ${has ? `<button id="apLmReset" title="Put the landmarks back on the template">Reset</button>` : ''}</div>`);
+  }
+  if (!rows.length) rows.push('<div class="lmrow">Add a photo or a 3D model, then place the landmarks so the autopilot knows where the nose, lips and chin are.</div>');
+  box.innerHTML = rows.join('');
+  $('#apLm3d')?.addEventListener('click', async () => { const A = await ensureAvatar(); if (!is3d()) await setMode('3d'); setTool3d('landmark'); A.startLandmarks(); });
+  $('#apShowLm')?.addEventListener('change', e => { AV().setShowLandmarks(e.target.checked); });
+  $('#apKind')?.addEventListener('change', e => { const vv = currentView(); vv.kind = e.target.value; vv.landmarks = null; vv.mm = 0; markDirty(); renderApLandmarks(); draw(); });
+  $('#apLm2d')?.addEventListener('click', async () => { if (is3d()) await setMode('2d'); setTool('landmarks'); });
+  $('#apMm')?.addEventListener('change', e => { const vv = currentView(); vv.mm = +e.target.value || 0; markDirty(); });
+  $('#apLmReset')?.addEventListener('click', () => { const vv = currentView(); vv.landmarks = null; ensureLandmarks(vv); markDirty(); draw(); });
+}
+/* 3D landmark prompt overlay */
+function renderLmPrompt() {
+  const box = $('#lmPrompt'); if (!box || !avatarInited) return;
+  const A = AV();
+  if (!is3d() || A.tool !== 'landmark') { box.hidden = true; return; }
+  const name = A.currentLandmarkName();
+  box.hidden = false;
+  box.innerHTML = name
+    ? `<span>Click <strong>${esc(A.LANDMARK_LABELS[name])}</strong> <em>(${A.LANDMARK_NAMES.indexOf(name) + 1}/${A.LANDMARK_NAMES.length})</em></span><button id="lmSkip">Skip</button><button id="lmDone">Done</button>`
+    : `<span>Landmarks placed. Click near a landmark to move it, or</span><button id="lmRestart">Start again</button><button id="lmDone">Done</button>`;
+  $('#lmSkip')?.addEventListener('click', () => A.skipLandmark());
+  $('#lmRestart')?.addEventListener('click', () => A.startLandmarks());
+  $('#lmDone')?.addEventListener('click', () => { A.finishLandmarks(); setTool3d('orbit'); });
+}
 
 /* ───────────────────────── Letters & documents ───────────────────────── */
 const DOC_MAX_ONE = 25 * 1024 * 1024, DOC_MAX_TOTAL = 80 * 1024 * 1024;
@@ -857,7 +1001,8 @@ function serialize() {
     app: 'morph-studio', version: 1, savedAt: new Date().toISOString(),
     patient: { ...state.patient }, notes: { ...state.notes },
     docs: state.docs.map(d => ({ ...d })),
-    views: state.views.map(v => ({ name: v.name, W: v.W, H: v.H, image: v.before.toDataURL('image/jpeg', 0.92), disp: encodeDisp(v), pins: v.pins.map(p => ({ ...p })) })),
+    views: state.views.map(v => ({ name: v.name, W: v.W, H: v.H, image: v.before.toDataURL('image/jpeg', 0.92), disp: encodeDisp(v), pins: v.pins.map(p => ({ ...p })), landmarks: v.landmarks ? JSON.parse(JSON.stringify(v.landmarks)) : null, kind: v.kind || '', mm: v.mm || 0 })),
+    chat: state.chat || [],
     avatar: avatarInited ? AV().serialize(v => state.views.indexOf(v)) : (pendingAvatar || null),
   };
 }
@@ -874,13 +1019,17 @@ async function restore(data) {
     const v = createView(d.name || 'Photo', await loadDataUrl(d.image));
     decodeDisp(v, d.disp);
     v.pins = (d.pins || []).map(p => ({ x: +p.x || 0, y: +p.y || 0, text: String(p.text || '') }));
+    if (d.landmarks && typeof d.landmarks === 'object') { v.landmarks = {}; for (const [k, q] of Object.entries(d.landmarks)) if (LM_NAMES.includes(k) && q && isFinite(q.x) && isFinite(q.y)) v.landmarks[k] = { x: +q.x, y: +q.y }; if (!Object.keys(v.landmarks).length) v.landmarks = null; }
+    v.kind = ['front', 'profile', 'other'].includes(d.kind) ? d.kind : ''; v.mm = +d.mm || 0;
     renderAll(v);
     state.views.push(v);
   }
   state.current = state.views.length ? 0 : -1; state.selectedPin = -1;
   pendingAvatar = data.avatar || null;
   if (avatarInited) { await AV().restore(pendingAvatar, i => state.views[i] || null); pendingAvatar = null; if (is3d()) autoAssignRoles(); }
-  syncFields(); renderTabs(); renderPinList(); updateHistoryButtons(); setMorph(1, false); fit(); draw();
+  state.chat = Array.isArray(data.chat) ? data.chat : [];
+  if (window.MorphAPI.loadChat) window.MorphAPI.loadChat(state.chat);
+  syncFields(); renderTabs(); renderPinList(); updateHistoryButtons(); setMorph(1, false); fit(); draw(); renderApLandmarks();
 }
 
 // Local autosave (IndexedDB) so an accidental refresh does not lose the consultation.
@@ -1104,6 +1253,64 @@ async function loadModelFile(file) {
   } catch (e) { alert('Could not load this 3D model: ' + (e.message || e)); setStatus('Model not loaded'); }
 }
 $('#btnLoadModel').addEventListener('click', () => el.fileModel.click());
+
+/* ── AI generation of the patient's 3D model from the front photo ── */
+let genJob = null;
+function genUI(on, pct, text) {
+  const box = $('#genProgress'); box.hidden = !on;
+  if (on) { box.querySelector('.fill').style.width = `${Math.max(2, Math.min(100, pct))}%`; box.querySelector('.txt').textContent = text || ''; }
+  $('#btnGenModel').disabled = on;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function postJSON(url, data) {
+  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+  let body = null; const ct = r.headers.get('content-type') || '';
+  if (ct.includes('application/json')) body = await r.json().catch(() => null);
+  return { ok: r.ok, status: r.status, body, raw: r };
+}
+async function generateModel() {
+  const A0 = avatarInited ? AV() : null;
+  let view = (A0 && A0.photos.front && state.views.includes(A0.photos.front)) ? A0.photos.front : state.views.find(v => viewKind(v) === 'front') || (currentView() && viewKind(currentView()) !== 'profile' ? currentView() : null);
+  if (!view) { alert('Add a front-view photo of the patient first (plain background, neutral expression, hair away from the face).'); return; }
+  if (!confirm(`Build a 3D model of the patient from the photo “${view.name}”?\n\nThe photo is sent to the AI 3D service (Meshy) to generate the model and is not kept in this app's servers. Make sure the patient has consented to this. Generation usually takes 1–3 minutes.`)) return;
+  genUI(true, 3, 'Sending photo…');
+  const image = view.before.toDataURL('image/jpeg', 0.92);
+  try {
+    const start = await postJSON('api/generate3d', { action: 'start', image });
+    if (start.status === 503) { genUI(false); alert('AI 3D generation is not enabled on this deployment yet.\n\nAdd a MESHY_API_KEY environment variable in the Vercel project (Settings → Environment Variables) and redeploy. Until then you can generate the model on the provider\'s website and use “Load 3D model file…”.'); return; }
+    if (!start.ok) throw new Error((start.body && start.body.message) || `Could not start generation (${start.status}).`);
+    const taskId = start.body.task_id; genJob = { taskId, cancelled: false };
+    let glbUrl = null;
+    for (let i = 0; i < 400 && !genJob.cancelled; i++) {
+      await sleep(i < 5 ? 3000 : 5000);
+      const st = await postJSON('api/generate3d', { action: 'status', task_id: taskId });
+      if (!st.ok) throw new Error((st.body && st.body.message) || `Status check failed (${st.status}).`);
+      const b = st.body;
+      if (b.status === 'failed') throw new Error(b.error || 'The AI service could not build a model from this photo.');
+      if (b.status === 'succeeded') { glbUrl = b.glb_url; break; }
+      genUI(true, 5 + (b.progress || 0) * 0.9, b.status === 'pending' ? `Waiting in the queue${b.preceding ? ` (${b.preceding} ahead)` : ''}…` : `Building the model… ${b.progress || 0}%`);
+    }
+    if (genJob.cancelled) { genUI(false); setStatus('3D generation cancelled'); return; }
+    if (!glbUrl) throw new Error('The model was not ready after a long wait. Try again later.');
+    genUI(true, 96, 'Downloading model…');
+    let buffer = null;
+    try { const r = await fetch(glbUrl); if (r.ok) buffer = await r.arrayBuffer(); } catch { /* CORS or network — fall back to the proxy */ }
+    if (!buffer) {
+      const r = await postJSON('api/generate3d', { action: 'fetch', task_id: taskId });
+      if (r.ok && r.raw) buffer = await r.raw.arrayBuffer();
+      else throw new Error((r.body && r.body.error === 'too_large_for_proxy') ? 'The model file is too large to download through the app; open this link in a new tab and load the file with “Load 3D model file…”:\n' + r.body.url : 'Could not download the finished model.');
+    }
+    const A = await ensureAvatar();
+    await A.loadGLB(buffer, `ai-model-${(state.patient.ref || state.patient.name || 'patient').replace(/[^\w-]+/g, '_')}.glb`);
+    if (!is3d()) await setMode('3d');
+    A.resetView(); genUI(false);
+    setStatus('AI 3D model ready — confirm the landmarks, then calibrate the scale with Measure + “Set as…”.');
+    setTool3d('landmark'); A.startLandmarks(); markDirty();
+  } catch (e) { genUI(false); alert('3D generation: ' + (e.message || e)); setStatus('3D generation failed'); }
+  finally { genJob = null; }
+}
+$('#btnGenModel').addEventListener('click', generateModel);
+$('#genCancel').addEventListener('click', () => { if (genJob) genJob.cancelled = true; });
 el.fileModel.addEventListener('change', () => { loadModelFile(el.fileModel.files[0]); el.fileModel.value = ''; });
 el.btnRemoveModel.addEventListener('click', () => { if (avatarInited && confirm('Remove the 3D model and go back to the generic head? Edits on the model are lost.')) { AV().removeModel(); autoAssignRoles(); } });
 $$('#turnRow button').forEach(b => b.addEventListener('click', () => { const [axis, q] = b.dataset.turn.split(':'); if (avatarInited) AV().turnModel(axis, +q); }));
@@ -1145,6 +1352,7 @@ async function setMode(mode) {
     fit();
   }
   $$('#modeSeg button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  renderApLandmarks(); renderLmPrompt();
   $('#btnReset').textContent = is3d() ? 'Reset avatar' : 'Reset this photo';
   setMorph(1, true); renderPinList(); renderRoleSelects(); updateHistoryButtons(); draw();
 }
@@ -1213,7 +1421,7 @@ $('#alignDone').addEventListener('click', () => {
 });
 el.alignModal.addEventListener('click', e => { if (e.target === el.alignModal) el.alignModal.hidden = true; });
 window.addEventListener('resize', () => { if (!el.alignModal.hidden) drawAlign(); });
-syncFields(); renderTabs(); renderPinList(); renderDocs(); setTool('push'); setCompare('slider');
+syncFields(); renderTabs(); renderPinList(); renderDocs(); setTool('push'); setCompare('slider'); renderApLandmarks();
 (async () => {
   try {
     const saved = await idbGet('current');
@@ -1222,5 +1430,5 @@ syncFields(); renderTabs(); renderPinList(); renderDocs(); setTool('push'); setC
 })();
 
 // Small test hook (not used by the UI).
-window.__morph = { state, addPhotos, addDocs, loadModelFile, serialize, restore, dab, renderAll, currentView, fit, draw, setMode, ensureAvatar, openAlign };
+window.__morph = { state, addPhotos, addDocs, loadModelFile, generateModel, ensureLandmarks, applyPushes2D, serialize, restore, dab, renderAll, currentView, fit, draw, setMode, ensureAvatar, openAlign };
 })();

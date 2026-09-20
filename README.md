@@ -194,17 +194,40 @@ two points in millimetres, calibrate against a known distance (e.g. pupil to pup
 size shown in mm, a scale bar, and measurements that update live to show the before/after
 change.
 
+**AI autopilot** — instead of sculpting by hand, the surgeon types the change ("reduce the
+dorsal hump by 2 mm and rotate the tip up 5°"), presses *Apply planned changes* / *Apply
+consultation notes*, or relays the patient's feedback ("the tip looks too upturned — a bit
+less"). The instruction is turned into anatomical edits in millimetres and applied live to
+the 3D model and to the front/profile photos, one undo step per instruction. Understanding
+comes from Claude through `api/autopilot.js` when the deployment has an `ANTHROPIC_API_KEY`;
+without it a built-in phrase parser handles the common phrasings. Edits are anchored to
+seven landmarks (pupils, nasion, rhinion, tip, subnasale, chin) that the surgeon confirms
+with the *Landmarks* tool; the generic head sets them automatically, a generated model gets
+a first guess.
+
+**AI 3D model of the patient** — *Generate 3D model from front photo* sends the front photo
+to Meshy's image-to-3D API through `api/generate3d.js` (needs `MESHY_API_KEY`), shows
+progress, loads the finished head into the 3D tab and starts the landmark confirmation.
+A `.glb` from any other service or a phone scan can be loaded instead.
+
 **Consultation record** — patient name / reference / date / procedure, planned changes,
 consultation notes, numbered notes pinned to the photo or the head, letters and documents
-sent to the patient (PDF, Word, images, text — previewed in the app), and an editable
-disclaimer. *Print summary* produces a printable (or save-as-PDF) sheet with before/after
-images from every photo, five angles of the avatar with a measurement table, notes, the
-document list and signature lines. *Export image* downloads a labelled before/after PNG.
-*Save case* downloads a `.json` file (including the 3D model and documents) that can be
-reopened later; the current case is also kept in the browser (IndexedDB) so an accidental
-refresh loses nothing.
+sent to the patient (PDF, Word, images, text — previewed in the app), the autopilot
+conversation, and an editable disclaimer. *Print summary* produces a printable
+(or save-as-PDF) sheet with before/after images from every photo, five angles of the avatar
+with a measurement table, notes, the document list and signature lines. *Export image*
+downloads a labelled before/after PNG. *Save case* downloads a `.json` file (including the
+3D model and documents) that can be reopened later; the current case is also kept in the
+browser (IndexedDB) so an accidental refresh loses nothing.
+
+**Deployment** — static files plus two Vercel serverless functions (`api/`). Environment
+variables on the Vercel project: `ANTHROPIC_API_KEY` (autopilot language understanding,
+optional), `MESHY_API_KEY` (AI 3D generation, optional), `AUTOPILOT_MODEL`, `MESHY_MODEL`,
+`MESHY_POLYCOUNT` (optional overrides). `build.sh` is the Vercel build command; it fetches
+this branch from GitHub into `public/`.
 
 Files: `index.html`, `styles.css`, `app.js` (2D warp engine, notes, save/print/export),
-`avatar.js` (3D model loading, generic head, texture projection, sculpting, measurements)
-and a vendored copy of [three.js](https://threejs.org) r170 (MIT) in `vendor/three/` so it
-also works offline.
+`avatar.js` (3D model loading, generic head, texture projection, sculpting, landmarks,
+measurements), `autopilot.js` (anatomy semantics, phrase parser, chat), `api/autopilot.js`
+and `api/generate3d.js` (serverless), and a vendored copy of [three.js](https://threejs.org)
+r170 (MIT) in `vendor/three/` so the app itself works offline.

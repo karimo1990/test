@@ -85,12 +85,13 @@ const A = {
   model: null,                       // { kind, name, glb, parts, faces }
   mmPerUnit: 117, scaleSource: 'assumed',   // real-world scale of the model
   measures: [], pendingPoint: null,          // distance measurements anchored to vertices
-  onDirty: () => {}, onHistory: () => {}, onPins: () => {}, onStatus: () => {}, onModel: () => {}, onMeasure: () => {},
+  landmarks: {}, landmarkStep: -1, showLandmarks: false,   // anatomical anchor points {name: {part, vi}}
+  onDirty: () => {}, onHistory: () => {}, onPins: () => {}, onStatus: () => {}, onModel: () => {}, onMeasure: () => {}, onLandmarks: () => {},
   GUIDES, PRESETS,
 };
 let stage, renderer, scene, camera, controls, afterGroup, beforeGroup, ring, pinGroup, off, loopOn = false;
 let genericMaterial, texture, texCanvas, genericGeo;
-let stroke = null, hoverHit = null, measureGroup, ghostMaterial;
+let stroke = null, hoverHit = null, measureGroup, ghostMaterial, landmarkGroup;
 const raycaster = new THREE.Raycaster();
 const pointerIds = new Set();
 const pinSprites = [];
@@ -130,6 +131,7 @@ A.init = function (stageEl) {
   ring.renderOrder = 10; ring.visible = false; scene.add(ring);
   pinGroup = new THREE.Group(); scene.add(pinGroup);
   measureGroup = new THREE.Group(); scene.add(measureGroup);
+  landmarkGroup = new THREE.Group(); scene.add(landmarkGroup);
   ghostMaterial = new THREE.MeshBasicMaterial({ color: 0x1fb6c1, transparent: true, opacity: 0.32, depthWrite: false, side: THREE.DoubleSide });
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -201,6 +203,7 @@ function useGenericModel() {
   const part = makePart(geo, genericMaterial);
   A.model = { kind: 'generic', name: 'Generic head', glb: null, parts: [part], faces: geo.index.count / 3 };
   A.mmPerUnit = 117; A.scaleSource = 'assumed'; clearMeasures();
+  autoLandmarksGeneric();
   afterGroup.add(part.mesh); beforeGroup.add(part.beforeMesh);
   bake();
   A.onModel(); A.onHistory(); A.onPins(false);
@@ -240,6 +243,7 @@ A.loadGLB = function (buffer, name = 'model.glb') {
         let faces = 0; newParts.forEach(p => { faces += p.geo.index.count / 3; afterGroup.add(p.mesh); beforeGroup.add(p.beforeMesh); });
         A.model = { kind: 'glb', name, glb: buffer, parts: newParts, faces, turns: [] };
         A.mmPerUnit = mmPerUnit; A.scaleSource = scaleSource; clearMeasures();
+        guessLandmarksGLB();
         A.resetView();
         A.onModel(); A.onHistory(); A.onPins(false); A.onDirty();
         resolve(A.model);
@@ -350,16 +354,17 @@ function updatePins() {
 function frame() {
   controls.autoRotate = A.autoRotate;
   controls.update();
-  updatePins(); updateMeasures();
+  updatePins(); updateMeasures(); updateLandmarkSprites(); stepAnimation();
   measureGroup.visible = !A.showBefore;
+  landmarkGroup.visible = !A.showBefore && (A.showLandmarks || A.tool === 'landmark');
   const w = renderer.domElement.width / renderer.getPixelRatio(), h = renderer.domElement.height / renderer.getPixelRatio();
   const showAfter = !A.showBefore;
   if (A.compare === 'side' && !A.showBefore) {
     renderer.setScissorTest(true);
     camera.aspect = (w / 2) / h; camera.updateProjectionMatrix();
-    beforeGroup.visible = true; afterGroup.visible = false; pinGroup.visible = false; measureGroup.visible = false; ring.visible = false;
+    beforeGroup.visible = true; afterGroup.visible = false; pinGroup.visible = false; measureGroup.visible = false; landmarkGroup.visible = false; ring.visible = false;
     renderer.setViewport(0, 0, w / 2, h); renderer.setScissor(0, 0, w / 2, h); renderer.render(scene, camera);
-    beforeGroup.visible = false; afterGroup.visible = true; pinGroup.visible = true; measureGroup.visible = !A.showBefore; ring.visible = !!hoverHit && isSculpt();
+    beforeGroup.visible = false; afterGroup.visible = true; pinGroup.visible = true; measureGroup.visible = !A.showBefore; landmarkGroup.visible = A.showLandmarks || A.tool === 'landmark'; ring.visible = !!hoverHit && isSculpt();
     renderer.setViewport(w / 2, 0, w / 2, h); renderer.setScissor(w / 2, 0, w / 2, h); renderer.render(scene, camera);
     renderer.setScissorTest(false);
   } else {
@@ -379,7 +384,7 @@ function frame() {
   afterGroup.visible = true; beforeGroup.visible = true;
 }
 const isSculpt = () => ['grab', 'add', 'sub', 'smooth', 'restore'].includes(A.tool);
-const isPointTool = () => A.tool === 'note' || A.tool === 'measure';
+const isPointTool = () => A.tool === 'note' || A.tool === 'measure' || A.tool === 'landmark';
 
 /* ───────────── Camera / view ───────────── */
 A.setView = function (preset) {
@@ -519,6 +524,7 @@ function onDown(e) {
   const hit = raycastNdc(ndc); if (!hit) return;
   if (A.tool === 'note') { e.preventDefault(); addPin(hit.partIndex, closestVertex(hit)); return; }
   if (A.tool === 'measure') { e.preventDefault(); addMeasurePoint(hit.partIndex, closestVertex(hit)); return; }
+  if (A.tool === 'landmark') { e.preventDefault(); placeLandmark(hit.partIndex, closestVertex(hit)); return; }
   renderer.domElement.setPointerCapture(e.pointerId);
   if (A.morph < 1) A.setMorph(1);
   stroke = { ndc, touched: {}, raf: 0 };
@@ -720,11 +726,11 @@ A.snapshot = function (kind, preset, size = 1000) {
   }
   camera.aspect = 1; camera.updateProjectionMatrix();
   if (savedMorph < 1) A.setMorph(1);
-  beforeGroup.visible = kind === 'before'; afterGroup.visible = kind !== 'before'; pinGroup.visible = kind !== 'before'; measureGroup.visible = kind !== 'before'; ring.visible = false;
+  beforeGroup.visible = kind === 'before'; afterGroup.visible = kind !== 'before'; pinGroup.visible = kind !== 'before'; measureGroup.visible = kind !== 'before'; landmarkGroup.visible = false; ring.visible = false;
   updateMeasures();
   off.render(scene, camera);
   const c = document.createElement('canvas'); c.width = c.height = size; c.getContext('2d').drawImage(off.domElement, 0, 0);
-  beforeGroup.visible = afterGroup.visible = measureGroup.visible = true;
+  beforeGroup.visible = afterGroup.visible = measureGroup.visible = true; landmarkGroup.visible = A.showLandmarks;
   camera.position.copy(savedPos); camera.quaternion.copy(savedQuat); camera.aspect = savedAspect; camera.updateProjectionMatrix();
   if (savedMorph < 1) A.setMorph(savedMorph);
   return c;
@@ -755,7 +761,7 @@ A.serialize = function (viewIndex) {
   const roles = {};
   for (const r of ['front', 'right', 'left']) roles[r] = A.photos[r] ? { view: viewIndex(A.photos[r]), align: A.align[r] } : null;
   const model = isGeneric() ? null : { name: A.model.name, glb: b64FromBytes(new Uint8Array(A.model.glb)), turns: A.model.turns.slice() };
-  return { version: 2, roles, model, parts: encodeParts(), pins: A.pins.map(p => ({ ...p })), mmPerUnit: A.mmPerUnit, scaleSource: A.scaleSource, measures: A.measures.map(m => ({ a: { ...m.a }, b: { ...m.b }, label: m.label || '' })) };
+  return { version: 2, roles, model, parts: encodeParts(), pins: A.pins.map(p => ({ ...p })), mmPerUnit: A.mmPerUnit, scaleSource: A.scaleSource, measures: A.measures.map(m => ({ a: { ...m.a }, b: { ...m.b }, label: m.label || '' })), landmarks: JSON.parse(JSON.stringify(A.landmarks)) };
 };
 A.restore = async function (data, viewAt) {
   for (const r of ['front', 'right', 'left']) { A.photos[r] = null; A.align[r] = null; }
@@ -782,10 +788,11 @@ A.restore = async function (data, viewAt) {
     const okRef = r => r && np[r.part] && Number.isInteger(r.vi) && r.vi >= 0 && r.vi < np[r.part].n;
     A.measures = (data.measures || []).filter(m => okRef(m.a) && okRef(m.b)).map(m => ({ a: { ...m.a }, b: { ...m.b }, label: String(m.label || '') }));
     if (data.mmPerUnit > 0) { A.mmPerUnit = data.mmPerUnit; A.scaleSource = data.scaleSource || 'calibrated'; }
+    if (data.landmarks && typeof data.landmarks === 'object') { const lm = {}; for (const [k, r] of Object.entries(data.landmarks)) if (LANDMARK_NAMES.includes(k) && okRef(r)) lm[k] = { part: r.part, vi: r.vi }; if (Object.keys(lm).length) A.landmarks = lm; }
   }
   A.selectedPin = -1; A.pendingPoint = null;
-  commit(); rebuildPinSprites(); rebuildMeasureObjects();
-  A.onModel(); A.onHistory(); A.onPins(false); A.onMeasure();
+  commit(); rebuildPinSprites(); rebuildMeasureObjects(); rebuildLandmarkSprites();
+  A.onModel(); A.onHistory(); A.onPins(false); A.onMeasure(); A.onLandmarks();
 };
 A.dropView = function (view) {
   let changed = false;
@@ -793,5 +800,149 @@ A.dropView = function (view) {
   if (changed && isGeneric()) bake();
 };
 
+/* ───────────── Anatomical landmarks ─────────────
+   Seven points the surgeon confirms; everything else (alar bases, lips, cheeks, jaw, brows…)
+   is derived from them in millimetres, so the AI autopilot knows where each structure is. */
+const LANDMARK_NAMES = ['pupil_r', 'pupil_l', 'nasion', 'rhinion', 'pronasale', 'subnasale', 'pogonion'];
+const LANDMARK_LABELS = {
+  pupil_r: "Right pupil (patient's right — on your left)", pupil_l: "Left pupil (patient's left)",
+  nasion: 'Nasion — deepest point of the nose bridge, between the eyes', rhinion: 'Rhinion — middle of the nasal dorsum (where a hump sits)',
+  pronasale: 'Nose tip (most projecting point)', subnasale: 'Subnasale — where the columella meets the upper lip', pogonion: 'Chin — most forward point',
+};
+A.LANDMARK_NAMES = LANDMARK_NAMES; A.LANDMARK_LABELS = LANDMARK_LABELS;
+A.landmarksReady = () => LANDMARK_NAMES.every(n => A.landmarks[n]);
+function nearestVertex(target, filter) {
+  let best = null, bd = Infinity;
+  parts().forEach((p, pi) => {
+    const a = p.cur;
+    for (let i = 0; i < p.n; i++) {
+      const dx = a[i * 3] - target.x, dy = a[i * 3 + 1] - target.y, dz = a[i * 3 + 2] - target.z;
+      if (filter && !filter(a[i * 3], a[i * 3 + 1], a[i * 3 + 2])) continue;
+      const d = dx * dx + dy * dy + dz * dz; if (d < bd) { bd = d; best = { part: pi, vi: i }; }
+    }
+  });
+  return best;
+}
+function autoLandmarksGeneric() {
+  const F = 2; // any point well in front; nearestVertex with a front-facing filter snaps it to the surface
+  const guess = { pupil_r: [-0.26, 0.09, F], pupil_l: [0.26, 0.09, F], nasion: [0, 0.2, F], rhinion: [0, 0.03, F], pronasale: [0, -0.14, F], subnasale: [0, -0.24, F], pogonion: [0, -0.85, F] };
+  A.landmarks = {};
+  for (const [k, g] of Object.entries(guess)) {
+    const t = new THREE.Vector3(g[0], g[1], g[2]), best = nearestVertex(t, (x, y, z) => z > 0.2 && Math.abs(x - g[0]) < 0.04 && Math.abs(y - g[1]) < 0.04);
+    if (best) A.landmarks[k] = best;
+  }
+  A.landmarkStep = -1; rebuildLandmarkSprites(); A.onLandmarks();
+}
+/* Rough guesses for a loaded model (front = +z after orientation); the surgeon confirms with the Landmarks tool. */
+function guessLandmarksGLB() {
+  A.landmarks = {}; A.landmarkStep = -1;
+  let tip = null, tz = -Infinity;
+  parts().forEach((p, pi) => { const a = p.cur; for (let i = 0; i < p.n; i++) { const x = a[i * 3], y = a[i * 3 + 1], z = a[i * 3 + 2]; if (Math.abs(x) < 0.12 && y > -0.6 && y < 0.6 && z > tz) { tz = z; tip = { part: pi, vi: i, x, y, z }; } } });
+  if (!tip) { rebuildLandmarkSprites(); A.onLandmarks(); return; }
+  const u = A.mmToUnits(1); // units per mm
+  const midline = (dyMm, prefer) => {
+    const y0 = tip.y + dyMm * u; let best = null, bz = prefer === 'min' ? Infinity : -Infinity;
+    parts().forEach((p, pi) => { const a = p.cur; for (let i = 0; i < p.n; i++) { const x = a[i * 3], y = a[i * 3 + 1], z = a[i * 3 + 2]; if (Math.abs(x) > 4 * u || Math.abs(y - y0) > 4 * u || z < tip.z - 60 * u) continue; if (prefer === 'min' ? z < bz : z > bz) { bz = z; best = { part: pi, vi: i }; } } });
+    return best;
+  };
+  A.landmarks.pronasale = { part: tip.part, vi: tip.vi };
+  A.landmarks.subnasale = midline(-14, 'min') || A.landmarks.pronasale;
+  A.landmarks.rhinion = midline(18, 'max') || A.landmarks.pronasale;
+  A.landmarks.nasion = midline(34, 'min') || A.landmarks.rhinion;
+  A.landmarks.pogonion = midline(-62, 'max') || A.landmarks.subnasale;
+  const ny = tip.y + 36 * u;
+  for (const [k, sx] of [['pupil_r', -1], ['pupil_l', 1]]) {
+    const b = nearestVertex(new THREE.Vector3(sx * 31 * u, ny, tip.z), (x, y, z) => Math.sign(x) === sx && Math.abs(Math.abs(x) - 31 * u) < 8 * u && Math.abs(y - ny) < 8 * u && z > tip.z - 40 * u);
+    if (b) A.landmarks[k] = b;
+  }
+  rebuildLandmarkSprites(); A.onLandmarks();
+}
+A.startLandmarks = function () { A.landmarkStep = 0; A.setTool('landmark'); A.onLandmarks(); };
+A.skipLandmark = function () { if (A.landmarkStep >= 0) { A.landmarkStep++; if (A.landmarkStep >= LANDMARK_NAMES.length) A.landmarkStep = -1; A.onLandmarks(); } };
+A.finishLandmarks = function () { A.landmarkStep = -1; A.onLandmarks(); };
+A.currentLandmarkName = () => (A.landmarkStep >= 0 ? LANDMARK_NAMES[A.landmarkStep] : null);
+function placeLandmark(part, vi) {
+  const name = A.currentLandmarkName() || A.pickNearestLandmarkName(part, vi);
+  if (!name) return;
+  A.landmarks[name] = { part, vi };
+  if (A.landmarkStep >= 0) { A.landmarkStep++; if (A.landmarkStep >= LANDMARK_NAMES.length) A.landmarkStep = -1; }
+  rebuildLandmarkSprites(); A.onLandmarks(); A.onDirty();
+}
+A.pickNearestLandmarkName = function (part, vi) {
+  const p = parts()[part], a = p.cur, x = a[vi * 3], y = a[vi * 3 + 1], z = a[vi * 3 + 2];
+  let best = null, bd = Infinity;
+  for (const n of LANDMARK_NAMES) { const r = A.landmarks[n]; if (!r) return n; const q = parts()[r.part].cur, d = (q[r.vi * 3] - x) ** 2 + (q[r.vi * 3 + 1] - y) ** 2 + (q[r.vi * 3 + 2] - z) ** 2; if (d < bd) { bd = d; best = n; } }
+  return best;
+};
+A.landmarkPoint = function (name) { const r = A.landmarks[name]; return r ? vertexPos(r, 'after') : null; };
+A.landmarkNormal = function (name) { const r = A.landmarks[name]; if (!r) return null; const n = parts()[r.part].geo.attributes.normal.array, k = r.vi * 3; return new THREE.Vector3(n[k], n[k + 1], n[k + 2]).normalize(); };
+const landmarkSprites = [];
+function rebuildLandmarkSprites() {
+  landmarkSprites.forEach(s => { landmarkGroup.remove(s); s.material.map.dispose(); s.material.dispose(); });
+  landmarkSprites.length = 0;
+  for (const name of LANDMARK_NAMES) {
+    if (!A.landmarks[name]) continue;
+    const short = { pupil_r: 'R pupil', pupil_l: 'L pupil', nasion: 'Nasion', rhinion: 'Rhinion', pronasale: 'Tip', subnasale: 'Subnasale', pogonion: 'Chin' }[name];
+    const { t, w } = labelTexture('● ' + short);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true }));
+    s.scale.set(0.0026 * w, 0.0026 * 44, 1); s.renderOrder = 22; s.userData.name = name; s.center.set(0.08, 0.5);
+    landmarkGroup.add(s); landmarkSprites.push(s);
+  }
+}
+function updateLandmarkSprites() { for (const s of landmarkSprites) { const p = A.landmarkPoint(s.userData.name); if (p) s.position.copy(p); } }
+A.setShowLandmarks = on => { A.showLandmarks = !!on; };
+
+/* ───────────── Autopilot: apply anatomical pushes ─────────────
+   A push moves the surface around a point: { point: Vector3, dir: Vector3 (unit), mm, radiusMm, sign }.
+   Direction 'normal' uses the local surface normal. All pushes of one plan form a single undo step. */
+let anim = null;
+function stepAnimation() {
+  if (!anim) return;
+  const t = Math.min(1, (performance.now() - anim.t0) / anim.dur), e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  parts().forEach((p, pi) => { const from = anim.from[pi], disp = p.geo.attributes.position.array; for (let i = 0; i < disp.length; i++) disp[i] = from[i] + (p.cur[i] - from[i]) * e; commitPart(p); });
+  if (t >= 1) anim = null;
+}
+A.applyPushes = function (pushes, opts = {}) {
+  if (!pushes.length) return { applied: 0 };
+  const from = parts().map(p => p.geo.attributes.position.array.slice());
+  const touched = {}; let applied = 0;
+  const touchLocal = (p, pi, i) => { const t = touched[pi] || (touched[pi] = { part: pi, seen: new Uint8Array(p.n), idx: [], old: [] }); if (t.seen[i]) return; t.seen[i] = 1; t.idx.push(i); t.old.push(p.cur[i * 3], p.cur[i * 3 + 1], p.cur[i * 3 + 2]); };
+  for (const push of pushes) {
+    const r = A.mmToUnits(push.radiusMm), r2 = r * r, amount = A.mmToUnits(push.mm), c = push.point;
+    const dir = push.dir.clone().normalize();
+    parts().forEach((p, pi) => {
+      const cur = p.cur, n = p.geo.attributes.normal.array;
+      for (let i = 0; i < p.n; i++) {
+        const o = i * 3, dx = cur[o] - c.x, dy = cur[o + 1] - c.y, dz = cur[o + 2] - c.z, d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 >= r2) continue;
+        const q = 1 - d2 / r2, f = q * q * amount;
+        touchLocal(p, pi, i);
+        if (push.mode === 'smooth') {
+          const a0 = p.adj.start[i], a1 = p.adj.start[i + 1]; if (a1 === a0) continue;
+          let ax = 0, ay = 0, az = 0; for (let a = a0; a < a1; a++) { const j = p.adj.list[a] * 3; ax += cur[j]; ay += cur[j + 1]; az += cur[j + 2]; }
+          const inv = 1 / (a1 - a0), w = q * q * Math.min(1, push.mm);
+          cur[o] += (ax * inv - cur[o]) * w; cur[o + 1] += (ay * inv - cur[o + 1]) * w; cur[o + 2] += (az * inv - cur[o + 2]) * w;
+        } else if (push.mode === 'restore') {
+          const w = q * q * Math.min(1, push.mm);
+          for (let k = 0; k < 3; k++) cur[o + k] += (p.base[o + k] - cur[o + k]) * w;
+        } else if (push.useNormal) {
+          cur[o] += n[o] * f; cur[o + 1] += n[o + 1] * f; cur[o + 2] += n[o + 2] * f;
+        } else {
+          cur[o] += dir.x * f; cur[o + 1] += dir.y * f; cur[o + 2] += dir.z * f;
+        }
+      }
+    });
+    applied++;
+  }
+  for (const p of parts()) p.geo.computeVertexNormals();
+  const entries = Object.values(touched).map(t => ({ part: t.part, idx: Uint32Array.from(t.idx), old: Float32Array.from(t.old) })).filter(t => t.idx.length);
+  if (entries.length) { A.history.push(entries); if (A.history.length > HISTORY_LIMIT) A.history.shift(); A.redo = []; }
+  A.morph = 1;
+  if (opts.animate !== false) anim = { from, t0: performance.now(), dur: 700 }; else commit();
+  A.onHistory(); A.onDirty();
+  return { applied };
+};
+
+A.Vec3 = THREE.Vector3;
 window.Avatar3D = A;
 window.dispatchEvent(new Event('avatar-ready'));

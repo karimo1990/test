@@ -143,6 +143,33 @@ label.inline input[type="range"] { width: 140px; }
 .scalebar { position: absolute; right: 14px; bottom: 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; pointer-events: none; font-size: 11px; font-weight: 600; color: var(--ink); }
 .scalebar .bar { height: 6px; width: 60px; border: 2px solid var(--ink); border-top: 0; }
 
+.gen-progress { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+.gen-progress .bar { flex: 1; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.gen-progress .fill { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+.gen-progress button { padding: 2px 8px; font-size: 12px; }
+
+/* AI autopilot */
+.ap { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fbfcfd; }
+.ap-log { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.ap-log .hint { margin: 0; }
+.ap-msg { font-size: 13px; line-height: 1.4; padding: 8px 10px; border-radius: 10px; background: #fff; border: 1px solid var(--line); }
+.ap-msg.ap-user { background: var(--accent-soft); border-color: transparent; }
+.ap-who { display: block; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
+.ap-msg ul { margin: 4px 0; padding-left: 18px; }
+.ap-res { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.ap textarea { min-height: 56px; margin-bottom: 6px; }
+.ap .row { margin-bottom: 6px; }
+.ap-status { font-size: 12px; color: var(--accent-dark); min-height: 0; margin-bottom: 4px; }
+.ap-landmarks { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; display: flex; flex-direction: column; gap: 6px; }
+.ap-landmarks .lmrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ap-landmarks .ok { color: #1a7f37; font-weight: 600; }
+.ap-landmarks .todo { color: #b45309; font-weight: 600; }
+.ap-landmarks button, .ap-landmarks select, .ap-landmarks input { padding: 3px 8px; font-size: 12px; width: auto; }
+.ap-landmarks input[type="number"] { width: 64px; }
+.lm-prompt { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); background: rgba(22,33,46,.92); color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 13px; display: flex; align-items: center; gap: 10px; max-width: 90%; z-index: 5; }
+.lm-prompt strong { color: #ffd166; }
+.lm-prompt button { padding: 3px 9px; font-size: 12px; color: var(--ink); }
+
 /* Alignment dialog */
 .modal { position: fixed; inset: 0; background: rgba(22,33,46,.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
 .modal[hidden] { display: none; }

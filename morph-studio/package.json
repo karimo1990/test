@@ -1,0 +1,10 @@
+{
+  "name": "morph-studio",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Before/after simulation aid for facial surgery consultations. Static app plus one serverless function (api/autopilot.js).",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.60.0"
+  }
+}
