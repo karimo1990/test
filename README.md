@@ -205,10 +205,22 @@ seven landmarks (pupils, nasion, rhinion, tip, subnasale, chin) that the surgeon
 with the *Landmarks* tool; the generic head sets them automatically, a generated model gets
 a first guess.
 
-**AI 3D model of the patient** — *Generate 3D model from front photo* sends the front photo
-to Meshy's image-to-3D API through `api/generate3d.js` (needs `MESHY_API_KEY`), shows
-progress, loads the finished head into the 3D tab and starts the landmark confirmation.
-A `.glb` from any other service or a phone scan can be loaded instead.
+**AI 3D model of the patient** — the 3D tab opens on *Generate 3D model from front photo*:
+the photo goes to Meshy's image-to-3D API through `api/generate3d.js` (needs `MESHY_API_KEY`),
+progress is shown, and the finished head of the patient is loaded, landmarked and calibrated.
+A `.glb` from another service or a phone scan can be loaded instead. A generic placeholder
+head is available only on request.
+
+**Notes upload** — *Upload notes & apply* (or *Read & apply* on any attached document) reads
+typed-up consultation notes or letters (PDF via the vendored pdf.js, Word `.docx`, text; scans
+and photos of notes through `api/extract.js` with Claude vision), extracts the surgical plan
+and applies it. Statements such as "no change to the chin" are respected.
+
+**Versions ("Morph 1", "Morph 2"…)** — save the simulation at any point as a named version
+(one click from the autopilot panel or with a custom name), show any version again, and
+*Compare* two options: the "before" side of every comparison mode (slider, side by side,
+ghost, hold Space) then shows the chosen version instead of the original. Versions are saved
+with the case and printed on the summary with front and profile images.
 
 **Consultation record** — patient name / reference / date / procedure, planned changes,
 consultation notes, numbered notes pinned to the photo or the head, letters and documents

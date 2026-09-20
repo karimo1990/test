@@ -46,6 +46,7 @@ const state = {
   showBefore: false,
   selectedPin: -1,
   mode: '2d',
+  versions: [], currentVersion: null, referenceVersion: null, usePlaceholder: false,
 };
 
 const el = {
@@ -62,6 +63,7 @@ const el = {
   docs: $('#docs'), docList: $('#docList'), docCount: $('#docCount'), fileDocs: $('#fileDocs'),
   fileModel: $('#fileModel'), modelStatus: $('#modelStatus'), btnRemoveModel: $('#btnRemoveModel'), turnRow: $('#turnRow'), photoRoles: $('#photoRoles'),
   scaleStatus: $('#scaleStatus'), measureList: $('#measureList'), btnClearMeasures: $('#btnClearMeasures'), scalebar: $('#scalebar'),
+  gen3d: $('#gen3d'), gen3dHint: $('#gen3dHint'), verList: $('#verList'), verCount: $('#verCount'), verName: $('#verName'), fileNotes: $('#fileNotes'),
   docModal: $('#docModal'), docTitle: $('#docTitle'), docBody: $('#docBody'), docDownload: $('#docDownload'),
 };
 const is3d = () => state.mode === '3d';
@@ -75,7 +77,7 @@ async function ensureAvatar() {
     const A = AV();
     A.onDirty = markDirty; A.onHistory = updateHistoryButtons; A.onStatus = setStatus;
     A.onPins = focus => { if (is3d()) { renderPinList(); if (focus) focusPin(A.selectedPin); } };
-    A.onModel = () => { renderModelPanel(); renderRoleSelects(); updateBrushLabel(); };
+    A.onModel = () => { renderModelPanel(); renderRoleSelects(); updateBrushLabel(); renderGen3d(); };
     A.onMeasure = () => renderMeasures();
     A.onLandmarks = () => { renderApLandmarks(); renderLmPrompt(); };
     A.init(el.stage);
@@ -284,21 +286,22 @@ function draw() {
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
   const mode = state.showBefore ? 'before' : state.compare;
   const labels = [];
-  if (mode === 'before') { ctx.drawImage(v.before, 0, 0); labels.push(['Original', 0, 'left']); }
+  const beforeImg = v.refCanvas || v.before, beforeLabel = v.refCanvas ? (state.referenceVersion ? state.referenceVersion.name : 'Reference') : 'Before';
+  if (mode === 'before') { ctx.drawImage(beforeImg, 0, 0); labels.push([v.refCanvas ? beforeLabel : 'Original', 0, 'left']); }
   else if (mode === 'after') { ctx.drawImage(v.after, 0, 0); labels.push(['Simulated', W, 'right']); }
   else if (mode === 'fade') {
-    ctx.drawImage(v.before, 0, 0);
+    ctx.drawImage(beforeImg, 0, 0);
     ctx.globalAlpha = state.fade; ctx.drawImage(v.after, 0, 0); ctx.globalAlpha = 1;
     labels.push([`Simulated ${Math.round(state.fade * 100)}%`, W, 'right']);
   } else if (mode === 'side') {
-    ctx.drawImage(v.before, 0, 0);
+    ctx.drawImage(beforeImg, 0, 0);
     ctx.drawImage(v.after, W + sideGap(v), 0);
-    labels.push(['Before', 0, 'left'], ['Simulated after', W + sideGap(v), 'left']);
+    labels.push([beforeLabel, 0, 'left'], ['Simulated after', W + sideGap(v), 'left']);
   } else {
     const sx = state.divider * W;
-    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, sx, H); ctx.clip(); ctx.drawImage(v.before, 0, 0); ctx.restore();
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, sx, H); ctx.clip(); ctx.drawImage(beforeImg, 0, 0); ctx.restore();
     ctx.save(); ctx.beginPath(); ctx.rect(sx, 0, W - sx, H); ctx.clip(); ctx.drawImage(v.after, 0, 0); ctx.restore();
-    labels.push(['Before', 0, 'left'], ['Simulated', W, 'right']);
+    labels.push([beforeLabel, 0, 'left'], ['Simulated', W, 'right']);
   }
   if (!state.showBefore) { drawPins(v); if (state.tool === 'landmarks' && v.landmarks) drawLandmarks(v); }
   ctx.restore();
@@ -732,7 +735,7 @@ async function addPhotos(files) {
     } catch (err) { alert(err.message); }
   }
   state.current = state.views.length - 1; state.selectedPin = -1;
-  renderTabs(); renderPinList(); updateHistoryButtons(); fit(); markDirty(); renderApLandmarks();
+  renderTabs(); renderPinList(); updateHistoryButtons(); fit(); markDirty(); renderApLandmarks(); renderGen3d();
   setStatus(`${list.length} photo${list.length > 1 ? 's' : ''} added`);
   if (avatarInited) autoAssignRoles();
 }
@@ -895,6 +898,132 @@ function renderLmPrompt() {
   $('#lmDone')?.addEventListener('click', () => { A.finishLandmarks(); setTool3d('orbit'); });
 }
 
+/* ───────────────────────── Versions ("Morph 1", "Morph 2"…) ───────────────────────── */
+function renderWithDisp(v, dx, dy) {
+  const c = document.createElement('canvas'); c.width = v.W; c.height = v.H;
+  const cctx = c.getContext('2d'), out = cctx.createImageData(v.W, v.H);
+  const saved = { dx: v.dx, dy: v.dy, out: v.out, actx: v.actx };
+  v.dx = dx; v.dy = dy; v.out = out; v.actx = cctx;
+  try { renderAll(v, 1); } finally { v.dx = saved.dx; v.dy = saved.dy; v.out = saved.out; v.actx = saved.actx; }
+  return c;
+}
+function decodeDispArrays(v, d) { const dx = new Float32Array(v.W * v.H), dy = new Float32Array(v.W * v.H); if (d) { const saved = { dx: v.dx, dy: v.dy }; v.dx = dx; v.dy = dy; try { decodeDisp(v, d); } finally { v.dx = saved.dx; v.dy = saved.dy; } } return { dx, dy }; }
+function nextVersionNumber() { let n = 1; for (const ver of state.versions) { const m = /morph\s*(\d+)/i.exec(ver.name); if (m) n = Math.max(n, +m[1] + 1); } return Math.max(n, state.versions.length + 1); }
+function captureVersion(name, note) {
+  const A = avatarInited ? AV() : null;
+  const has3d = A && A.model && (A.model.kind !== 'generic' || A.hasEdits());
+  const ver = {
+    id: 'ver-' + Date.now().toString(36), name: name || `Morph ${nextVersionNumber()}`, at: new Date().toISOString(), note: note || '',
+    threeD: has3d ? A.encodeState(A.captureState()) : null,
+    views: state.views.map(v => ({ disp: encodeDisp(v, 4) })),
+  };
+  state.versions.push(ver); state.currentVersion = ver.id;
+  renderVersions(); markDirty(); setStatus(`Saved “${ver.name}”`);
+  return ver;
+}
+function applyVersion(ver) {
+  const A = avatarInited ? AV() : null;
+  if (A && A.model) {
+    const arrays = ver.threeD ? A.decodeState(ver.threeD) : A.model.parts.map(p => p.base.slice());
+    if (arrays) A.applyState(arrays, { animate: is3d(), record: true });
+  }
+  state.views.forEach((v, i) => {
+    const d = ver.views[i] ? ver.views[i].disp : null;
+    v.history.push({ b: { x0: 0, y0: 0, x1: v.W - 1, y1: v.H - 1 }, dx: v.dx.slice(), dy: v.dy.slice() }); if (v.history.length > HISTORY_LIMIT) v.history.shift(); v.redo = [];
+    const { dx, dy } = decodeDispArrays(v, d); v.dx.set(dx); v.dy.set(dy); renderAll(v);
+  });
+  state.currentVersion = ver.id; setMorph(1, false);
+  updateHistoryButtons(); renderVersions(); draw(); markDirty(); setStatus(`Showing “${ver.name}”`);
+}
+function setReferenceVersion(ver) {
+  state.referenceVersion = ver || null;
+  const A = avatarInited ? AV() : null;
+  if (A && A.model) A.setReference(ver && ver.threeD ? A.decodeState(ver.threeD) : null);
+  state.views.forEach((v, i) => {
+    if (!ver) { v.refCanvas = null; return; }
+    const d = ver.views[i] ? ver.views[i].disp : null;
+    const { dx, dy } = decodeDispArrays(v, d); v.refCanvas = renderWithDisp(v, dx, dy);
+  });
+  renderVersions(); draw();
+}
+function deleteVersion(ver) {
+  if (!confirm(`Delete “${ver.name}”?`)) return;
+  state.versions = state.versions.filter(x => x !== ver);
+  if (state.referenceVersion === ver) setReferenceVersion(null);
+  if (state.currentVersion === ver.id) state.currentVersion = null;
+  renderVersions(); markDirty();
+}
+function renderVersions() {
+  el.verList.innerHTML = '';
+  el.verCount.textContent = state.versions.length ? `(${state.versions.length})` : '';
+  $('#apNextN').textContent = nextVersionNumber();
+  el.verName.placeholder = `Morph ${nextVersionNumber()} — e.g. patient's preferred option`;
+  state.versions.forEach((ver, i) => {
+    const row = document.createElement('div');
+    row.className = 'ver' + (ver.id === state.currentVersion ? ' current' : '') + (state.referenceVersion === ver ? ' reference' : '');
+    const when = new Date(ver.at).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' });
+    row.innerHTML = `<span class="num">${i + 1}</span><div class="info"><span class="n" title="${esc(ver.name)}">${esc(ver.name)}</span><span class="s" title="${esc(ver.note)}">${when}${ver.note ? ' · ' + esc(ver.note) : ''}</span></div>
+      <button class="show" title="Show this version (you can keep editing from it)">Show</button>
+      <button class="cmp ${state.referenceVersion === ver ? 'on' : ''}" title="Use this version as the “before” side when comparing">${state.referenceVersion === ver ? 'Comparing' : 'Compare'}</button>
+      <button class="x" title="Delete version">×</button>`;
+    row.querySelector('.show').addEventListener('click', () => applyVersion(ver));
+    row.querySelector('.cmp').addEventListener('click', () => setReferenceVersion(state.referenceVersion === ver ? null : ver));
+    row.querySelector('.x').addEventListener('click', () => deleteVersion(ver));
+    el.verList.appendChild(row);
+  });
+  if (state.referenceVersion) {
+    const r = document.createElement('div'); r.className = 'hint';
+    r.innerHTML = `Comparing against <strong>${esc(state.referenceVersion.name)}</strong>. <button id="verRefOff" style="padding:2px 8px;font-size:12px">Back to original</button>`;
+    el.verList.appendChild(r); $('#verRefOff').addEventListener('click', () => setReferenceVersion(null));
+  }
+}
+function lastAutopilotSummary() { const msgs = state.chat || []; for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'assistant') { const t = msgs[i].text.split('\n').find(l => /\bby\b/.test(l)) || ''; return t.slice(0, 140); } return ''; }
+$('#verSave').addEventListener('click', () => { const name = el.verName.value.trim(); el.verName.value = ''; captureVersion(name, lastAutopilotSummary()); });
+$('#apSaveVersion').addEventListener('click', () => captureVersion('', lastAutopilotSummary()));
+function serializeVersions() { return state.versions.map(v => ({ id: v.id, name: v.name, at: v.at, note: v.note, threeD: v.threeD, views: v.views })); }
+
+/* ───────────────────────── Notes upload → extract → apply ───────────────────────── */
+const extractReady = new Promise(res => { if (window.Extract) res(); else window.addEventListener('extract-ready', res, { once: true }); });
+async function extractAndApply(doc) {
+  setStatus(`Reading ${doc.name}…`);
+  try {
+    await extractReady;
+    const r = await window.Extract.extractText(doc);
+    if (r.warning && !r.text) { alert(r.warning); setStatus('Notes not read'); return; }
+    if (r.warning) alert(r.warning);
+    const text = r.text.trim();
+    if (text.length < 8) { alert(`No text could be read from “${doc.name}”.`); setStatus('Notes not read'); return; }
+    doc.extracted = text.slice(0, 20000);
+    setStatus(`Read ${doc.name} (${r.method}) — applying…`);
+    await window.Autopilot.applyDocumentText(text.slice(0, 12000), doc.name);
+    markDirty();
+  } catch (e) { alert(`Could not read “${doc.name}”: ${e.message || e}`); setStatus('Notes not read'); }
+}
+$('#apUpload').addEventListener('click', () => el.fileNotes.click());
+el.fileNotes.addEventListener('change', async () => {
+  const files = Array.from(el.fileNotes.files); el.fileNotes.value = '';
+  if (!files.length) return;
+  const before = state.docs.length;
+  await addDocs(files);
+  for (const d of state.docs.slice(before)) await extractAndApply(d);
+});
+
+/* ───────────────────────── 3D empty state (no patient model yet) ───────────────────────── */
+function renderGen3d() {
+  if (!is3d()) { el.gen3d.hidden = true; return; }
+  const A = avatarInited ? AV() : null;
+  const noModel = !A || !A.model || A.model.kind === 'generic';
+  const show = noModel && !state.usePlaceholder;
+  el.gen3d.hidden = !show;
+  if (A) A.hideModel = show;
+  const front = state.views.find(v => viewKind(v) === 'front') || state.views[0];
+  el.gen3dHint.textContent = front ? `Front photo to use: “${front.name}”. Generation takes 1–3 minutes; the photo is sent to the AI 3D service only when you press the button.` : 'Add the patient\'s front photo first (Photo morph tab or “+ Add photo”).';
+  $('#gen3dGo').disabled = !front;
+}
+$('#gen3dGo').addEventListener('click', () => generateModel());
+$('#gen3dLoad').addEventListener('click', () => el.fileModel.click());
+$('#gen3dPlaceholder').addEventListener('click', () => { state.usePlaceholder = true; renderGen3d(); if (avatarInited) autoAssignRoles(); markDirty(); });
+
 /* ───────────────────────── Letters & documents ───────────────────────── */
 const DOC_MAX_ONE = 25 * 1024 * 1024, DOC_MAX_TOTAL = 80 * 1024 * 1024;
 const fmtSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`;
@@ -934,9 +1063,10 @@ function renderDocs() {
     const row = document.createElement('div'); row.className = 'doc';
     row.innerHTML = `<div class="doc-top"><span class="doc-icon">${labels[docKind(d)]}</span>
         <div class="doc-name"><span class="n" title="${esc(d.name)}">${esc(d.name)}</span><span class="s">${fmtSize(d.size)}</span></div>
-        <div class="doc-actions"><button class="view">View</button><button class="x" title="Remove document">×</button></div></div>
+        <div class="doc-actions"><button class="apply" title="Read the notes in this document and apply the plan to the simulation">Read &amp; apply</button><button class="view">View</button><button class="x" title="Remove document">×</button></div></div>
       <div class="doc-meta"><input type="date" value="${esc(d.date)}" title="Date of the letter"><input type="text" placeholder="e.g. Consultation letter, quote, consent form…" value="${esc(d.note)}"></div>`;
     row.querySelector('.view').addEventListener('click', () => openDoc(d));
+    row.querySelector('.apply').addEventListener('click', () => extractAndApply(d));
     row.querySelector('.x').addEventListener('click', () => { if (confirm(`Remove "${d.name}" from this case?`)) { state.docs.splice(i, 1); renderDocs(); markDirty(); } });
     row.querySelector('input[type="date"]').addEventListener('input', ev => { d.date = ev.target.value; markDirty(); });
     row.querySelector('input[type="text"]').addEventListener('input', ev => { d.note = ev.target.value; markDirty(); });
@@ -970,17 +1100,17 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (!el.do
 function b64FromBytes(bytes) { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); }
 function bytesFromB64(b64) { const s = atob(b64), out = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i); return out; }
 
-function encodeDisp(v) {
+function encodeDisp(v, scale = DISP_SCALE) {
   let any = false;
   for (let i = 0; i < v.dx.length; i++) if (v.dx[i] !== 0 || v.dy[i] !== 0) { any = true; break; }
   if (!any) return null;
-  const w = Math.ceil(v.W / DISP_SCALE), h = Math.ceil(v.H / DISP_SCALE), q = new Int16Array(w * h * 2);
+  const w = Math.ceil(v.W / scale), h = Math.ceil(v.H / scale), q = new Int16Array(w * h * 2);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const i = Math.min(v.H - 1, y * DISP_SCALE) * v.W + Math.min(v.W - 1, x * DISP_SCALE), o = (y * w + x) * 2;
+    const i = Math.min(v.H - 1, y * scale) * v.W + Math.min(v.W - 1, x * scale), o = (y * w + x) * 2;
     q[o] = clamp(Math.round(v.dx[i] * DISP_Q), -32768, 32767);
     q[o + 1] = clamp(Math.round(v.dy[i] * DISP_Q), -32768, 32767);
   }
-  return { scale: DISP_SCALE, q: DISP_Q, w, h, data: b64FromBytes(new Uint8Array(q.buffer)) };
+  return { scale, q: DISP_Q, w, h, data: b64FromBytes(new Uint8Array(q.buffer)) };
 }
 function decodeDisp(v, d) {
   if (!d) return;
@@ -1003,6 +1133,7 @@ function serialize() {
     docs: state.docs.map(d => ({ ...d })),
     views: state.views.map(v => ({ name: v.name, W: v.W, H: v.H, image: v.before.toDataURL('image/jpeg', 0.92), disp: encodeDisp(v), pins: v.pins.map(p => ({ ...p })), landmarks: v.landmarks ? JSON.parse(JSON.stringify(v.landmarks)) : null, kind: v.kind || '', mm: v.mm || 0 })),
     chat: state.chat || [],
+    versions: serializeVersions(), usePlaceholder: !!state.usePlaceholder,
     avatar: avatarInited ? AV().serialize(v => state.views.indexOf(v)) : (pendingAvatar || null),
   };
 }
@@ -1028,8 +1159,11 @@ async function restore(data) {
   pendingAvatar = data.avatar || null;
   if (avatarInited) { await AV().restore(pendingAvatar, i => state.views[i] || null); pendingAvatar = null; if (is3d()) autoAssignRoles(); }
   state.chat = Array.isArray(data.chat) ? data.chat : [];
+  state.versions = (Array.isArray(data.versions) ? data.versions : []).filter(v => v && v.name).map(v => ({ id: v.id || 'ver-' + Math.random().toString(36).slice(2), name: String(v.name), at: v.at || new Date().toISOString(), note: String(v.note || ''), threeD: v.threeD || null, views: Array.isArray(v.views) ? v.views : [] }));
+  state.currentVersion = null; state.referenceVersion = null; state.views.forEach(v => { v.refCanvas = null; }); state.usePlaceholder = !!data.usePlaceholder;
+  renderVersions();
   if (window.MorphAPI.loadChat) window.MorphAPI.loadChat(state.chat);
-  syncFields(); renderTabs(); renderPinList(); updateHistoryButtons(); setMorph(1, false); fit(); draw(); renderApLandmarks();
+  syncFields(); renderTabs(); renderPinList(); updateHistoryButtons(); setMorph(1, false); fit(); draw(); renderApLandmarks(); renderGen3d();
 }
 
 // Local autosave (IndexedDB) so an accidental refresh does not lose the consultation.
@@ -1183,6 +1317,15 @@ $('#btnPrint').addEventListener('click', () => {
     }
     html += '</section>';
   }
+  if (state.versions.length) {
+    html += '<h2>Versions discussed</h2>';
+    for (const ver of state.versions) {
+      html += `<section class="print-view"><p><strong>${esc(ver.name)}</strong> — ${esc(new Date(ver.at).toLocaleString())}${ver.note ? ' · ' + esc(ver.note) : ''}</p><div class="pair">`;
+      if (A && A.model && ver.threeD) { const arrays = A.decodeState(ver.threeD); if (arrays) for (const [preset, name] of [['front', 'Front'], ['right', 'Right profile']]) html += `<figure><img src="${A.snapshotState(arrays, preset, 600).toDataURL('image/jpeg', 0.85)}" alt="${esc(ver.name)} ${name}"><figcaption>${esc(ver.name)} — ${name}</figcaption></figure>`; }
+      state.views.slice(0, 2).forEach((v, i) => { const d = ver.views[i] ? ver.views[i].disp : null; const { dx, dy } = decodeDispArrays(v, d); html += `<figure><img src="${renderWithDisp(v, dx, dy).toDataURL('image/jpeg', 0.85)}" alt="${esc(ver.name)} ${esc(v.name)}"><figcaption>${esc(ver.name)} — ${esc(v.name)}</figcaption></figure>`; });
+      html += '</div></section>';
+    }
+  }
   if (state.notes.plan.trim()) html += `<h2>Planned changes</h2><p>${esc(state.notes.plan)}</p>`;
   if (state.notes.consultation.trim()) html += `<h2>Consultation notes</h2><p>${esc(state.notes.consultation)}</p>`;
   if (state.docs.length) {
@@ -1303,7 +1446,7 @@ async function generateModel() {
     const A = await ensureAvatar();
     await A.loadGLB(buffer, `ai-model-${(state.patient.ref || state.patient.name || 'patient').replace(/[^\w-]+/g, '_')}.glb`);
     if (!is3d()) await setMode('3d');
-    A.resetView(); genUI(false);
+    A.resetView(); genUI(false); renderGen3d();
     setStatus('AI 3D model ready — confirm the landmarks, then calibrate the scale with Measure + “Set as…”.');
     setTool3d('landmark'); A.startLandmarks(); markDirty();
   } catch (e) { genUI(false); alert('3D generation: ' + (e.message || e)); setStatus('3D generation failed'); }
@@ -1352,7 +1495,7 @@ async function setMode(mode) {
     fit();
   }
   $$('#modeSeg button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
-  renderApLandmarks(); renderLmPrompt();
+  renderApLandmarks(); renderLmPrompt(); renderGen3d();
   $('#btnReset').textContent = is3d() ? 'Reset avatar' : 'Reset this photo';
   setMorph(1, true); renderPinList(); renderRoleSelects(); updateHistoryButtons(); draw();
 }
@@ -1421,7 +1564,7 @@ $('#alignDone').addEventListener('click', () => {
 });
 el.alignModal.addEventListener('click', e => { if (e.target === el.alignModal) el.alignModal.hidden = true; });
 window.addEventListener('resize', () => { if (!el.alignModal.hidden) drawAlign(); });
-syncFields(); renderTabs(); renderPinList(); renderDocs(); setTool('push'); setCompare('slider'); renderApLandmarks();
+syncFields(); renderTabs(); renderPinList(); renderDocs(); setTool('push'); setCompare('slider'); renderApLandmarks(); renderVersions();
 (async () => {
   try {
     const saved = await idbGet('current');
@@ -1430,5 +1573,5 @@ syncFields(); renderTabs(); renderPinList(); renderDocs(); setTool('push'); setC
 })();
 
 // Small test hook (not used by the UI).
-window.__morph = { state, addPhotos, addDocs, loadModelFile, generateModel, ensureLandmarks, applyPushes2D, serialize, restore, dab, renderAll, currentView, fit, draw, setMode, ensureAvatar, openAlign };
+window.__morph = { state, addPhotos, addDocs, loadModelFile, generateModel, ensureLandmarks, applyPushes2D, captureVersion, applyVersion, setReferenceVersion, extractAndApply, serialize, restore, dab, renderAll, currentView, fit, draw, setMode, ensureAvatar, openAlign };
 })();

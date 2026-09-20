@@ -129,6 +129,15 @@
       <div class="divider" id="divider" hidden><span class="knob" title="Drag to compare">◀ ▶</span></div>
       <div class="hint3d only-3d" id="hint3d" hidden></div>
       <div class="lm-prompt" id="lmPrompt" hidden></div>
+      <div class="gen3d only-3d" id="gen3d" hidden>
+        <div class="card">
+          <h2>3D model of the patient</h2>
+          <p>Build a realistic, to-scale 3D head of the patient from the front photo. The simulation is then applied to this model and shown from every angle, before and after.</p>
+          <button id="gen3dGo" class="primary">✦ Generate 3D model from front photo</button>
+          <div class="alt"><button id="gen3dLoad">Load a .glb from a scan</button><button id="gen3dPlaceholder" class="quiet">Use a placeholder head for now</button></div>
+          <p class="hint" id="gen3dHint"></p>
+        </div>
+      </div>
       <div class="scalebar only-3d" id="scalebar" hidden><div class="bar"></div><span>20 mm</span></div>
       <div class="empty only-2d" id="empty">
         <div class="card">
@@ -185,9 +194,20 @@
       </div>
       <div class="row">
         <button id="apNotes" title="Apply what the consultation notes describe">Apply consultation notes</button>
+        <button id="apUpload" title="Upload typed-up notes or a letter (PDF, Word, text or a photo); the plan is extracted and applied">Upload notes &amp; apply…</button>
+      </div>
+      <div class="row">
+        <button id="apSaveVersion" title="Keep the current simulation as a named version (Morph 1, Morph 2…)">Save as Morph <span id="apNextN">1</span></button>
         <button id="apUndo" hidden>Undo last step</button>
       </div>
       <div class="ap-landmarks" id="apLandmarks"></div>
+    </div>
+
+    <h3>Versions <span class="count" id="verCount"></span></h3>
+    <div class="versions" id="versions">
+      <p class="hint" id="verHint">Save the simulation at any point as <strong>Morph 1</strong>, <strong>Morph 2</strong>… Show any version again, or compare two options with <strong>Compare</strong> (the “before” side then shows that version instead of the original).</p>
+      <div class="ver-list" id="verList"></div>
+      <div class="row ver-save"><input id="verName" placeholder="Name (e.g. Morph 2 — patient's preferred)"><button id="verSave" class="primary">Save version</button></div>
     </div>
 
     <h3>Patient &amp; procedure</h3>
@@ -270,6 +290,7 @@
 <input type="file" id="filePhotos" accept="image/*" multiple hidden>
 <input type="file" id="fileCase" accept=".json,application/json" hidden>
 <input type="file" id="fileModel" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden>
+<input type="file" id="fileNotes" accept=".pdf,.docx,.txt,.md,.rtf,image/*,application/pdf" hidden>
 <input type="file" id="fileDocs" multiple accept=".pdf,.doc,.docx,.odt,.rtf,.txt,.md,image/*,application/pdf,text/plain" hidden>
 <div class="modal" id="docModal" hidden>
   <div class="modal-card doc-card">
@@ -296,6 +317,7 @@
 
 <script src="app.js"></script>
 <script src="autopilot.js"></script>
+<script type="module" src="extract.js"></script>
 <script type="module" src="avatar.js"></script>
 </body>
 </html>

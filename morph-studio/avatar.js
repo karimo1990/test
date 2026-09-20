@@ -83,6 +83,7 @@ const A = {
   pins: [], selectedPin: -1,
   history: [], redo: [],
   model: null,                       // { kind, name, glb, parts, faces }
+  hideModel: false,                  // true while the generic placeholder is not wanted on screen
   mmPerUnit: 117, scaleSource: 'assumed',   // real-world scale of the model
   measures: [], pendingPoint: null,          // distance measurements anchored to vertices
   landmarks: {}, landmarkStep: -1, showLandmarks: false,   // anatomical anchor points {name: {part, vi}}
@@ -104,7 +105,7 @@ A.init = function (stageEl) {
   try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); }
   catch (e) { A.error = 'WebGL is not available in this browser.'; A.ready = true; return false; }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setClearColor(0xd9dee5, 1);
+  renderer.setClearColor(0x262b33, 1);
   renderer.domElement.id = 'gl';
   renderer.domElement.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:none;touch-action:none';
   stage.appendChild(renderer.domElement);
@@ -113,7 +114,7 @@ A.init = function (stageEl) {
   camera = new THREE.PerspectiveCamera(28, 1, 0.1, 100);
   camera.position.set(0, -0.1, 4.8);
   scene.add(camera);
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x8e98a3, 1.1));
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x6b7480, 1.0));
   const key = new THREE.DirectionalLight(0xffffff, 1.5); key.position.set(0.9, 1.1, 2.2); camera.add(key);
   const rim = new THREE.DirectionalLight(0xffffff, 0.35); rim.position.set(-2, 1, -2); scene.add(rim);
 
@@ -190,7 +191,7 @@ function makePart(geo, material) {
 }
 function clearModel() {
   for (const p of parts()) { afterGroup.remove(p.mesh); beforeGroup.remove(p.beforeMesh); p.beforeMesh.geometry.dispose(); if (A.model.kind !== 'generic') { p.geo.dispose(); disposeMaterial(p.mesh.material); } }
-  A.model = null; A.history = []; A.redo = []; A.pins = []; A.selectedPin = -1; rebuildPinSprites();
+  A.model = null; A.reference = null; A.history = []; A.redo = []; A.pins = []; A.selectedPin = -1; rebuildPinSprites();
 }
 function disposeMaterial(m) {
   for (const mat of Array.isArray(m) ? m : [m]) { for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) if (mat[k]) mat[k].dispose(); mat.dispose(); }
@@ -282,7 +283,7 @@ A.pxPerMm = function () {
 };
 function vertexPos(ref, which) {
   const p = parts()[ref.part]; if (!p) return null;
-  const arr = which === 'before' ? p.base : p.geo.attributes.position.array, k = ref.vi * 3;
+  const arr = which === 'before' ? (A.reference ? A.reference[ref.part] : p.base) : p.geo.attributes.position.array, k = ref.vi * 3;
   return new THREE.Vector3(arr[k], arr[k + 1], arr[k + 2]);
 }
 A.measureValues = function (i) {
@@ -359,6 +360,7 @@ function frame() {
   landmarkGroup.visible = !A.showBefore && (A.showLandmarks || A.tool === 'landmark');
   const w = renderer.domElement.width / renderer.getPixelRatio(), h = renderer.domElement.height / renderer.getPixelRatio();
   const showAfter = !A.showBefore;
+  if (A.hideModel) { afterGroup.visible = beforeGroup.visible = pinGroup.visible = measureGroup.visible = landmarkGroup.visible = ring.visible = false; renderer.setScissorTest(false); camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setViewport(0, 0, w, h); renderer.render(scene, camera); afterGroup.visible = beforeGroup.visible = true; return; }
   if (A.compare === 'side' && !A.showBefore) {
     renderer.setScissorTest(true);
     camera.aspect = (w / 2) / h; camera.updateProjectionMatrix();
@@ -432,7 +434,7 @@ function ndcFromEvent(e) {
   return new THREE.Vector2(x * 2 - 1, -(y * 2 - 1));
 }
 function raycastNdc(ndc) {
-  if (!ndc) return null;
+  if (!ndc || A.hideModel) return null;
   raycaster.setFromCamera(ndc, camera);
   const hits = raycaster.intersectObjects(parts().map(p => p.mesh), false);
   if (!hits.length) return null;
@@ -944,6 +946,42 @@ A.applyPushes = function (pushes, opts = {}) {
   return { applied };
 };
 
+/* ───────────── Versions ("Morph 1", "Morph 2"…) ─────────────
+   A version snapshot is the sculpted position array of every part; the reference
+   (what "before" shows) can be the original model or any saved version. */
+A.captureState = function () { return parts().map(p => p.cur.slice()); };
+A.applyState = function (arrays, opts = {}) {
+  if (!arrays || arrays.length !== parts().length) return false;
+  const entries = parts().map((p, pi) => { const idx = new Uint32Array(p.n); for (let i = 0; i < p.n; i++) idx[i] = i; return { part: pi, idx, old: p.cur.slice() }; });
+  parts().forEach((p, pi) => { if (arrays[pi].length === p.cur.length) p.cur.set(arrays[pi]); });
+  if (opts.record !== false) { A.history.push(entries); if (A.history.length > HISTORY_LIMIT) A.history.shift(); A.redo = []; }
+  A.morph = 1;
+  if (opts.animate) anim = { from: parts().map(p => p.geo.attributes.position.array.slice()), t0: performance.now(), dur: 700 }; else commit();
+  A.onHistory(); if (opts.record !== false) A.onDirty();
+  return true;
+};
+/* Encode / decode a state as quantised deltas from the base shape (for saving in the case). */
+A.encodeState = function (arrays) {
+  return arrays.map((arr, pi) => { const p = parts()[pi]; const q = new Int16Array(arr.length); for (let i = 0; i < arr.length; i++) q[i] = clamp(Math.round((arr[i] - p.base[i]) * DISP_Q), -32768, 32767); return { n: p.n, q: DISP_Q, data: b64FromBytes(new Uint8Array(q.buffer)) }; });
+};
+A.decodeState = function (list) {
+  if (!Array.isArray(list) || list.length !== parts().length) return null;
+  return list.map((d, pi) => { const p = parts()[pi]; if (!d || d.n !== p.n) return null; const q = new Int16Array(bytesFromB64(d.data).buffer), out = p.base.slice(); for (let i = 0; i < out.length && i < q.length; i++) out[i] = p.base[i] + q[i] / d.q; return out; }).every(Boolean) ? list.map((d, pi) => { const p = parts()[pi]; const q = new Int16Array(bytesFromB64(d.data).buffer), out = p.base.slice(); for (let i = 0; i < out.length && i < q.length; i++) out[i] = p.base[i] + q[i] / d.q; return out; }) : null;
+};
+/* Reference shape shown as "before": null = original model, else a captured state. */
+A.reference = null;
+A.setReference = function (arrays) {
+  A.reference = arrays && arrays.length === parts().length ? arrays : null;
+  parts().forEach((p, pi) => { const arr = p.beforeMesh.geometry.attributes.position.array; arr.set(A.reference ? A.reference[pi] : p.base); p.beforeMesh.geometry.attributes.position.needsUpdate = true; p.beforeMesh.geometry.computeVertexNormals(); });
+};
+/* Render a snapshot of an arbitrary state without disturbing the current one. */
+A.snapshotState = function (arrays, preset, size = 600) {
+  const saved = A.captureState(), savedMorph = A.morph;
+  parts().forEach((p, pi) => { p.cur.set(arrays[pi]); }); commit();
+  const c = A.snapshot('after', preset, size);
+  parts().forEach((p, pi) => { p.cur.set(saved[pi]); }); commit(); A.morph = savedMorph;
+  return c;
+};
 A.Vec3 = THREE.Vector3;
 window.Avatar3D = A;
 window.dispatchEvent(new Event('avatar-ready'));

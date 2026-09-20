@@ -50,6 +50,7 @@ How to plan:
 - Vague wishes map to concrete edits: "smaller nose" → dorsum reduce + tip deproject; "straighter profile" → dorsum reduce; "refine the tip" → tip narrow ~1.5 mm; "more balanced profile" with a weak chin → chin augment; "less droopy tip" → tip lift; "open the nasolabial angle" → tip lift.
 - Keep symmetry unless a side is named. Do not invent procedures the surgeon has not mentioned when the message is patient feedback; adjust the existing plan instead.
 - Only ask a question when nothing can be applied without it. Otherwise apply and mention assumptions in the reply.
+- When the latest message is a typed-up letter or a whole set of consultation notes (context says is_document), extract only the surgical plan that was proposed or agreed: ignore greetings, administrative text, risks, recovery advice and pricing. If the notes say a feature is to stay unchanged or the patient declined something, do not touch it. Summarise in the reply which parts of the document you used.
 - Always respond by calling apply_simulation_edits.`;
 
 export default async function handler(req, res) {
@@ -69,6 +70,7 @@ export default async function handler(req, res) {
     `Photos: ${(ctx.photos || []).map(p => `${p.name} (${p.kind}, landmarks ${p.landmarks ? 'set' : 'not set'})`).join('; ') || 'none'}`,
     `Already applied (in order): ${(ctx.applied || []).length ? ctx.applied.map((a, i) => `${i + 1}. ${a}`).join(' ') : 'nothing yet'}`,
     `Measurements: ${(ctx.measurements || []).join('; ') || 'none'}`,
+    `Latest message is a document: ${ctx.is_document ? 'yes' : 'no'}`,
   ].join('\n');
 
   // Trim any dangling assistant turn so the conversation ends with the new user message.

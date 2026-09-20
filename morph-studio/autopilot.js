@@ -184,8 +184,8 @@ const TARGET_RX = [
   [/\b(forehead|glabella)\b/, 'forehead'], [/\b(neck|submental|double chin|under the chin|jowl|jowls)\b/, 'neck'], [/\b(nose|nasal|rhinoplasty)\b/, 'nose'],
 ];
 const ACTION_RX = [
-  [/\b(rotate|rotation|rotated).{0,12}\b(up|upward|upwards|cephalic|cephalically)|\b(upturn|upturned|up-turn)\b|\b(lift|lifted|lifting|raise the tip|elevate|elevated)\b/, 'lift'],
-  [/\b(rotate|rotation).{0,12}\b(down|downward|caudal|caudally)|\b(derotate|de-rotate|drop|dropped|droop|lower|lowered|lowering|lengthen)\b/, 'lower'],
+  [/\b(rotate|rotation|rotated).{0,30}\b(up|upward|upwards|cephalic|cephalically)|\b(upturn|upturned|up-turn)\b|\b(lift|lifted|lifting|raise the tip|elevate|elevated)\b/, 'lift'],
+  [/\b(rotate|rotation).{0,30}\b(down|downward|caudal|caudally)|\b(derotate|de-rotate|drop|dropped|droop|lower|lowered|lowering|lengthen)\b/, 'lower'],
   [/\b(narrow|narrower|narrowing|thin|thinner|slim|slimmer|refine|refined|refinement|define|defined|definition|tighten|pinch)\b/, 'narrow'],
   [/\b(widen|wider|broaden|broader|flare out)\b/, 'widen'],
   [/\b(project|projection|projecting|advance|advancement|forward|bring out)\b/, 'project'],
@@ -200,6 +200,7 @@ function parseLocal(text) {
   const clauses = String(text).replace(/\r/g, '').split(/(?<=[.;!?\n])\s+|\n+|,\s+(?=(?:and\s+)?(?:also\s+)?[a-z])|\s+and\s+(?=[a-z]+\s+(?:the\s+)?[a-z])/i).map(c => c.trim()).filter(Boolean);
   for (const raw of clauses) {
     const c = raw.toLowerCase();
+    if (/\b(no|not|without|avoid|leave|unchanged|no change|don't|do not|declined|does not want|doesn't want|not keen|rather not)\b/.test(c) && !/\b(not too|not much|no more than)\b/.test(c)) continue;
     let target = null; for (const [rx, t] of TARGET_RX) if (rx.test(c)) { target = t; break; }
     if (!target) continue;
     let action = null; for (const [rx, a] of ACTION_RX) if (rx.test(c)) { action = a; break; }
@@ -284,7 +285,7 @@ function render() {
 function add(role, text, html) { chat.messages.push({ role, text, html }); render(); }
 window.MorphAPI.loadChat = msgs => { chat.messages = (msgs || []).map(m => ({ role: m.role, text: m.text })); chat.steps = []; render(); };
 
-async function askServer(userText) {
+async function askServer(userText, isDocument) {
   const M = window.MorphAPI, A = window.Avatar3D;
   const context = {
     procedure: M.procedure(), notes: M.notes(),
@@ -294,7 +295,7 @@ async function askServer(userText) {
     measurements: A && A.measures ? A.measures.map((m, i) => { const v = A.measureValues(i); return v ? `#${i + 1}: before ${v.before.toFixed(1)} mm, now ${v.after.toFixed(1)} mm` : ''; }).filter(Boolean) : [],
   };
   const history = chat.messages.filter(m => m.role !== 'system').slice(-12).map(m => ({ role: m.role, content: m.text }));
-  const res = await fetch('api/autopilot', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: userText, history, context }) });
+  const res = await fetch('api/autopilot', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: userText, history, context: { ...context, is_document: !!isDocument } }) });
   if (res.status === 503) return null; // no key configured → offline parser
   if (!res.ok) throw new Error(`AI service error (${res.status})`);
   return res.json();
@@ -303,11 +304,11 @@ async function handle(userText, source) {
   if (chat.busy) return;
   const text = String(userText || '').trim(); if (!text) return;
   chat.busy = true; el.send.disabled = true; el.status.textContent = 'Thinking…';
-  add('user', source ? `${source}\n${text}` : text);
+  add('user', source ? `${source}\n${text.length > 700 ? text.slice(0, 700) + ' …' : text}` : text);
   try {
     if (/^\s*(undo|undo that|undo last|go back)\s*[.!]?\s*$/i.test(text)) { undoStep(); add('assistant', 'Undone.'); return; }
     let plan = null;
-    try { plan = await askServer(text); } catch (e) { plan = null; chat.engine = 'built-in parser (AI service unreachable)'; }
+    try { plan = await askServer(text, /^Notes from|^Planned changes:|^Consultation notes:/.test(source || '')); } catch (e) { plan = null; chat.engine = 'built-in parser (AI service unreachable)'; }
     let ops, reply;
     if (plan && Array.isArray(plan.ops)) { ops = plan.ops.map(normaliseOp).filter(Boolean); reply = plan.reply || ''; chat.engine = plan.engine || 'Claude'; if (plan.questions && plan.questions.length) reply += (reply ? '\n' : '') + plan.questions.join('\n'); }
     else {
@@ -334,6 +335,6 @@ el.plan.addEventListener('click', () => { const n = window.MorphAPI.notes(); if 
 el.notes.addEventListener('click', () => { const n = window.MorphAPI.notes(); if (!n.consultation.trim()) { add('assistant', 'The “Consultation notes” box is empty.'); return; } handle(n.consultation, 'Consultation notes:'); });
 el.undo.addEventListener('click', () => { undoStep(); add('assistant', 'Last autopilot step undone.'); });
 
-window.Autopilot = { parseLocal, parseRelative, normaliseOp, resolve, applyOps, handle, OPS, DERIVED };
+window.Autopilot = { parseLocal, parseRelative, normaliseOp, resolve, applyOps, handle, applyDocumentText: (text, name) => handle(text, `Notes from “${name}”:`), OPS, DERIVED };
 render();
 })();

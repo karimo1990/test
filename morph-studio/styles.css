@@ -148,6 +148,35 @@ label.inline input[type="range"] { width: 140px; }
 .gen-progress .fill { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
 .gen-progress button { padding: 2px 8px; font-size: 12px; }
 
+/* 3D empty state */
+.gen3d { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(38,43,51,.72); z-index: 4; }
+.gen3d .card { background: #fff; border-radius: 16px; padding: 26px 30px; max-width: 520px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+.gen3d .card p { color: var(--muted); margin: 8px 0 16px; }
+.gen3d .card .primary { font-size: 15px; padding: 10px 18px; }
+.gen3d .alt { display: flex; gap: 8px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
+.gen3d .quiet { border-color: transparent; color: var(--muted); }
+.gen3d .hint { margin: 12px 0 0; }
+.stage.dark { background: #262b33; }
+
+/* Versions */
+.versions { border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.versions .hint { margin: 0 0 8px; }
+.ver-list { display: flex; flex-direction: column; gap: 6px; }
+.ver { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 13px; }
+.ver.current { border-color: var(--accent); background: var(--accent-soft); }
+.ver.reference { box-shadow: inset 3px 0 0 #ffb300; }
+.ver .num { flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--ink); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.ver .info { flex: 1; min-width: 0; }
+.ver .info .n { font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ver .info .s { font-size: 11px; color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ver button { padding: 3px 8px; font-size: 12px; }
+.ver button.on { background: #ffb300; border-color: #ffb300; color: #3a2a00; }
+.ver .x { border: 0; background: transparent; color: var(--muted); padding: 0 4px; font-size: 16px; }
+.ver .x:hover { color: var(--danger); }
+.ver-save { margin-top: 8px; }
+.ver-save input { flex: 1; }
+.ver-save button { flex: 0 0 auto; }
+
 /* AI autopilot */
 .ap { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fbfcfd; }
 .ap-log { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
