@@ -190,6 +190,13 @@
     <h3>Consultation notes</h3>
     <textarea id="nConsult" placeholder="Patient goals, concerns discussed, limitations explained, recovery expectations…"></textarea>
 
+    <h3>Letters &amp; documents <span class="count" id="docCount"></span></h3>
+    <div class="docs" id="docs">
+      <p class="hint">Attach the letters and notes sent to the patient (PDF, Word, images or text). They are kept with the case and listed on the printed summary. Drop files here or</p>
+      <button id="btnAddDocs" class="wide">Add documents…</button>
+      <div class="doc-list" id="docList"></div>
+    </div>
+
     <h3>Photo notes <span class="count" id="pinCount"></span></h3>
     <p class="hint" id="pinHint">Choose the <strong>Note</strong> tool and click on the photo or head to pin a numbered note.</p>
     <div class="pin-list" id="pinList"></div>
@@ -203,6 +210,13 @@
 
 <input type="file" id="filePhotos" accept="image/*" multiple hidden>
 <input type="file" id="fileCase" accept=".json,application/json" hidden>
+<input type="file" id="fileDocs" multiple accept=".pdf,.doc,.docx,.odt,.rtf,.txt,.md,image/*,application/pdf,text/plain" hidden>
+<div class="modal" id="docModal" hidden>
+  <div class="modal-card doc-card">
+    <div class="doc-head"><h2 id="docTitle">Document</h2><span class="spacer"></span><a id="docDownload" class="btn-link" download>Download</a><button id="docClose">Close</button></div>
+    <div class="doc-body" id="docBody"></div>
+  </div>
+</div>
 <div class="modal" id="alignModal" hidden>
   <div class="modal-card">
     <h2 id="alignTitle">Align photo</h2>

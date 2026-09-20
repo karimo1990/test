@@ -32,6 +32,7 @@ const nowTime = () => new Date().toLocaleTimeString([], { hour: '2-digit', minut
 const state = {
   patient: { name: '', ref: '', date: today(), procedure: 'Rhinoplasty', other: '' },
   notes: { plan: '', consultation: '', disclaimer: DEFAULT_DISCLAIMER },
+  docs: [],
   views: [],
   current: -1,
   tool: 'push',
@@ -58,6 +59,8 @@ const el = {
   btnUndo: $('#btnUndo'), btnRedo: $('#btnRedo'), printArea: $('#printArea'),
   brush3d: $('#brush3d'), brush3dVal: $('#brush3dVal'), symmetry: $('#symmetry'), autoRotate: $('#autoRotate'), hint3d: $('#hint3d'),
   alignModal: $('#alignModal'), alignCanvas: $('#alignCanvas'), alignTitle: $('#alignTitle'), alignSize: $('#alignSize'), alignFlip: $('#alignFlip'),
+  docs: $('#docs'), docList: $('#docList'), docCount: $('#docCount'), fileDocs: $('#fileDocs'),
+  docModal: $('#docModal'), docTitle: $('#docTitle'), docBody: $('#docBody'), docDownload: $('#docDownload'),
 };
 const is3d = () => state.mode === '3d';
 const AV = () => window.Avatar3D;
@@ -741,6 +744,77 @@ function syncFields() {
 }
 const procedureLabel = () => (state.patient.procedure === 'Other' && state.patient.other.trim()) ? state.patient.other.trim() : state.patient.procedure;
 
+/* ───────────────────────── Letters & documents ───────────────────────── */
+const DOC_MAX_ONE = 25 * 1024 * 1024, DOC_MAX_TOTAL = 80 * 1024 * 1024;
+const fmtSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+function docKind(d) {
+  const n = d.name.toLowerCase(), t = d.type || '';
+  if (t === 'application/pdf' || n.endsWith('.pdf')) return 'pdf';
+  if (t.startsWith('image/')) return 'image';
+  if (t.startsWith('text/') || /\.(txt|md|csv)$/.test(n)) return 'text';
+  if (/\.(docx?|odt|rtf)$/.test(n) || /word|opendocument|rtf/.test(t)) return 'word';
+  return 'file';
+}
+const readAsDataUrl = f => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Could not read ' + f.name)); r.readAsDataURL(f); });
+function dataUrlToBlob(u) {
+  const [head, b64] = u.split(','), mime = (head.match(/^data:([^;]*)/) || [])[1] || 'application/octet-stream';
+  const bytes = bytesFromB64(b64); return new Blob([bytes], { type: mime });
+}
+async function addDocs(files) {
+  const list = Array.from(files); if (!list.length) return;
+  let total = state.docs.reduce((a, d) => a + d.size, 0), added = 0;
+  for (const f of list) {
+    if (f.size > DOC_MAX_ONE) { alert(`${f.name} is larger than 25 MB and was skipped.`); continue; }
+    if (total + f.size > DOC_MAX_TOTAL) { alert(`Adding ${f.name} would take the case over 80 MB of documents; it was skipped.`); continue; }
+    try {
+      state.docs.push({ id: 'doc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7), name: f.name, type: f.type || '', size: f.size,
+        added: new Date().toISOString(), date: f.lastModified ? new Date(f.lastModified).toISOString().slice(0, 10) : today(), note: '', data: await readAsDataUrl(f) });
+      total += f.size; added++;
+    } catch (e) { alert(e.message); }
+  }
+  renderDocs(); markDirty();
+  if (added) setStatus(`${added} document${added > 1 ? 's' : ''} attached to the case`);
+}
+function renderDocs() {
+  el.docList.innerHTML = '';
+  el.docCount.textContent = state.docs.length ? `(${state.docs.length})` : '';
+  const labels = { pdf: 'PDF', image: 'IMG', text: 'TXT', word: 'DOC', file: 'FILE' };
+  state.docs.forEach((d, i) => {
+    const row = document.createElement('div'); row.className = 'doc';
+    row.innerHTML = `<div class="doc-top"><span class="doc-icon">${labels[docKind(d)]}</span>
+        <div class="doc-name"><span class="n" title="${esc(d.name)}">${esc(d.name)}</span><span class="s">${fmtSize(d.size)}</span></div>
+        <div class="doc-actions"><button class="view">View</button><button class="x" title="Remove document">×</button></div></div>
+      <div class="doc-meta"><input type="date" value="${esc(d.date)}" title="Date of the letter"><input type="text" placeholder="e.g. Consultation letter, quote, consent form…" value="${esc(d.note)}"></div>`;
+    row.querySelector('.view').addEventListener('click', () => openDoc(d));
+    row.querySelector('.x').addEventListener('click', () => { if (confirm(`Remove "${d.name}" from this case?`)) { state.docs.splice(i, 1); renderDocs(); markDirty(); } });
+    row.querySelector('input[type="date"]').addEventListener('input', ev => { d.date = ev.target.value; markDirty(); });
+    row.querySelector('input[type="text"]').addEventListener('input', ev => { d.note = ev.target.value; markDirty(); });
+    el.docList.appendChild(row);
+  });
+}
+let docUrl = null;
+function openDoc(d) {
+  closeDoc();
+  const blob = dataUrlToBlob(d.data); docUrl = URL.createObjectURL(blob);
+  el.docTitle.textContent = d.name; el.docDownload.href = docUrl; el.docDownload.download = d.name;
+  el.docBody.innerHTML = '';
+  const kind = docKind(d);
+  if (kind === 'pdf') { const f = document.createElement('iframe'); f.src = docUrl; f.title = d.name; el.docBody.appendChild(f); }
+  else if (kind === 'image') { const img = document.createElement('img'); img.src = docUrl; img.alt = d.name; el.docBody.appendChild(img); }
+  else if (kind === 'text') { const pre = document.createElement('pre'); blob.text().then(t => { pre.textContent = t; }); el.docBody.appendChild(pre); }
+  else { el.docBody.innerHTML = `<div class="none"><p>Preview is not available for this file type.</p><p>Use <strong>Download</strong> to open it in its own application.</p></div>`; }
+  el.docModal.hidden = false;
+}
+function closeDoc() { el.docModal.hidden = true; el.docBody.innerHTML = ''; if (docUrl) { URL.revokeObjectURL(docUrl); docUrl = null; } }
+$('#btnAddDocs').addEventListener('click', () => el.fileDocs.click());
+el.fileDocs.addEventListener('change', () => { addDocs(el.fileDocs.files); el.fileDocs.value = ''; });
+['dragenter', 'dragover'].forEach(ev => el.docs.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); el.docs.classList.add('dragover'); }));
+['dragleave', 'drop'].forEach(ev => el.docs.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); el.docs.classList.remove('dragover'); }));
+el.docs.addEventListener('drop', e => { if (e.dataTransfer?.files?.length) addDocs(e.dataTransfer.files); });
+$('#docClose').addEventListener('click', closeDoc);
+el.docModal.addEventListener('click', e => { if (e.target === el.docModal) closeDoc(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (!el.docModal.hidden) closeDoc(); else if (!el.alignModal.hidden) el.alignModal.hidden = true; } });
+
 /* ───────────────────────── Persistence ───────────────────────── */
 function b64FromBytes(bytes) { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); }
 function bytesFromB64(b64) { const s = atob(b64), out = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i); return out; }
@@ -775,6 +849,7 @@ function serialize() {
   return {
     app: 'morph-studio', version: 1, savedAt: new Date().toISOString(),
     patient: { ...state.patient }, notes: { ...state.notes },
+    docs: state.docs.map(d => ({ ...d })),
     views: state.views.map(v => ({ name: v.name, W: v.W, H: v.H, image: v.before.toDataURL('image/jpeg', 0.92), disp: encodeDisp(v), pins: v.pins.map(p => ({ ...p })) })),
     avatar: avatarInited ? AV().serialize(v => state.views.indexOf(v)) : (pendingAvatar || null),
   };
@@ -785,6 +860,8 @@ async function restore(data) {
   endStroke();
   state.patient = { name: '', ref: '', date: today(), procedure: 'Rhinoplasty', other: '', ...data.patient };
   state.notes = { plan: '', consultation: '', disclaimer: DEFAULT_DISCLAIMER, ...data.notes };
+  state.docs = (data.docs || []).filter(d => d && typeof d.data === 'string' && d.data.startsWith('data:')).map(d => ({ id: d.id || 'doc-' + Math.random().toString(36).slice(2), name: String(d.name || 'document'), type: String(d.type || ''), size: +d.size || 0, added: d.added || '', date: d.date || '', note: String(d.note || ''), data: d.data }));
+  renderDocs();
   state.views = [];
   for (const d of data.views || []) {
     const v = createView(d.name || 'Photo', await loadDataUrl(d.image));
@@ -807,9 +884,19 @@ function idb() {
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
-async function idbPut(key, val) { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction('cases', 'readwrite'); tx.objectStore('cases').put(val, key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
-async function idbGet(key) { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction('cases', 'readonly'), q = tx.objectStore('cases').get(key); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
-async function idbDel(key) { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction('cases', 'readwrite'); tx.objectStore('cases').delete(key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+async function idbRun(mode, fn) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction('cases', mode); let out;
+    try { out = fn(tx.objectStore('cases')); } catch (e) { db.close(); return rej(e); }
+    tx.oncomplete = () => { db.close(); res(out && 'result' in out ? out.result : undefined); };
+    tx.onerror = () => { db.close(); rej(tx.error); };
+    tx.onabort = () => { db.close(); rej(tx.error); };
+  });
+}
+const idbPut = (key, val) => idbRun('readwrite', s => s.put(val, key));
+const idbGet = key => idbRun('readonly', s => s.get(key));
+const idbDel = key => idbRun('readwrite', s => s.delete(key));
 
 let saveTimer = 0, dirty = false;
 function setStatus(msg) { el.status.textContent = msg; }
@@ -822,7 +909,7 @@ async function autosave() {
   try { await idbPut('current', serialize()); setStatus(`Kept on this device · ${nowTime()}`); }
   catch (e) { setStatus('Could not keep a local copy (storage blocked). Use Save case to download a file.'); }
 }
-window.addEventListener('beforeunload', e => { if (dirty && state.views.length) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', e => { if (dirty && (state.views.length || state.docs.length)) { e.preventDefault(); e.returnValue = ''; } });
 
 /* ───────────────────────── Case actions ───────────────────────── */
 function fileStem() {
@@ -850,7 +937,7 @@ el.fileCase.addEventListener('change', async () => {
   catch (e) { alert('Could not open this file: ' + e.message); }
 });
 $('#btnNew').addEventListener('click', async () => {
-  if (state.views.length && !confirm('Start a new case? The current case is removed from this device unless you saved it.')) return;
+  if ((state.views.length || state.docs.length) && !confirm('Start a new case? The current case is removed from this device unless you saved it.')) return;
   await restore({ app: 'morph-studio', version: 1, views: [] });
   dirty = false; await idbDel('current').catch(() => {});
   setStatus('New case');
@@ -914,7 +1001,7 @@ function composeSheet(beforeImg, afterImg, label, filename) {
 $('#btnPrint').addEventListener('click', () => {
   const A = avatarInited ? AV() : null;
   const has3d = A && (A.hasEdits() || ROLES.some(r => A.photos[r]));
-  if (!state.views.length && !has3d) return alert('Add a photo first.');
+  if (!state.views.length && !has3d && !state.docs.length) return alert('Add a photo or a document first.');
   if (state.morph < 1) { setMorph(1, true); draw(); }
   const meta = [state.patient.name && `Patient: ${esc(state.patient.name)}`, state.patient.ref && `Ref: ${esc(state.patient.ref)}`, state.patient.date && `Date: ${esc(state.patient.date)}`, `Procedure: ${esc(procedureLabel())}`].filter(Boolean).join(' &nbsp;·&nbsp; ');
   let html = `<h1>Consultation summary — simulated result</h1><div class="meta">${meta}</div>`;
@@ -938,6 +1025,10 @@ $('#btnPrint').addEventListener('click', () => {
   }
   if (state.notes.plan.trim()) html += `<h2>Planned changes</h2><p>${esc(state.notes.plan)}</p>`;
   if (state.notes.consultation.trim()) html += `<h2>Consultation notes</h2><p>${esc(state.notes.consultation)}</p>`;
+  if (state.docs.length) {
+    html += `<h2>Letters &amp; documents</h2><table><tr><th>Date</th><th>Document</th><th>Description</th></tr>${state.docs.map(d => `<tr><td>${esc(d.date)}</td><td>${esc(d.name)}</td><td>${esc(d.note)}</td></tr>`).join('')}</table>`;
+    for (const d of state.docs) if (docKind(d) === 'image') html += `<figure class="print-view"><img src="${d.data}" alt="${esc(d.name)}" style="max-height:120mm;width:auto"><figcaption>${esc(d.name)}${d.note ? ' — ' + esc(d.note) : ''}</figcaption></figure>`;
+  }
   html += `<div class="disclaimer">${esc(state.notes.disclaimer)}</div>
     <div class="sign"><div>Surgeon signature</div><div>Patient signature</div><div>Date</div></div>`;
   el.printArea.innerHTML = html;
@@ -1041,14 +1132,14 @@ $('#alignDone').addEventListener('click', () => {
 });
 el.alignModal.addEventListener('click', e => { if (e.target === el.alignModal) el.alignModal.hidden = true; });
 window.addEventListener('resize', () => { if (!el.alignModal.hidden) drawAlign(); });
-syncFields(); renderTabs(); renderPinList(); setTool('push'); setCompare('slider');
+syncFields(); renderTabs(); renderPinList(); renderDocs(); setTool('push'); setCompare('slider');
 (async () => {
   try {
     const saved = await idbGet('current');
-    if (saved && saved.views && saved.views.length) { await restore(saved); setStatus(`Restored the case from ${new Date(saved.savedAt).toLocaleString()} — use New case to clear it.`); }
+    if (saved && ((saved.views && saved.views.length) || (saved.docs && saved.docs.length))) { await restore(saved); setStatus(`Restored the case from ${new Date(saved.savedAt).toLocaleString()} — use New case to clear it.`); }
   } catch { /* no saved case */ }
 })();
 
 // Small test hook (not used by the UI).
-window.__morph = { state, addPhotos, serialize, restore, dab, renderAll, currentView, fit, draw, setMode, ensureAvatar, openAlign };
+window.__morph = { state, addPhotos, addDocs, serialize, restore, dab, renderAll, currentView, fit, draw, setMode, ensureAvatar, openAlign };
 })();
