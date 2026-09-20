@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Morph Studio — before &amp; after simulation</title>
+  <meta name="description" content="Simple in-browser before/after photo morphing for facial surgery consultations. Upload patient photos, sculpt the planned change, compare and annotate.">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="../assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script type="importmap">{"imports":{"three":"./vendor/three/three.module.min.js"}}</script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Morph Studio <span>before / after consultation aid</span></div>
+  <div class="seg mode" id="modeSeg" role="tablist">
+    <button data-mode="2d" class="active" title="Sculpt directly on the patient's photos">Photo morph</button>
+    <button data-mode="3d" title="A rotatable 3D head built from the photos">3D avatar</button>
+  </div>
+  <div class="status" id="status">Runs entirely on this device — photos are never uploaded.</div>
+  <div class="topbar-actions">
+    <button id="btnNew" title="Start a new, empty case">New case</button>
+    <button id="btnOpen" title="Open a saved case file (.json)">Open…</button>
+    <button id="btnSave" title="Download this case as a file you can reopen later">Save case</button>
+    <button id="btnExport" title="Download a labelled before / after image of the current photo">Export image</button>
+    <button id="btnPrint" class="primary" title="Print or save a consultation summary as PDF">Print summary</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ───────── Tools ───────── -->
+  <aside class="panel tools">
+    <h3>Tools</h3>
+    <div class="tool-grid only-2d" id="toolGrid">
+      <button data-tool="push" class="active" title="Drag to move tissue in the direction you pull">
+        <svg viewBox="0 0 24 24"><path d="M4 12h13M13 6l6 6-6 6"/></svg>Push<kbd>P</kbd>
+      </button>
+      <button data-tool="shrink" title="Hold to pull tissue inwards (reduce)">
+        <svg viewBox="0 0 24 24"><path d="M4 4l6 6M10 5v5H5M20 20l-6-6M14 19v-5h5M20 4l-6 6M14 5v5h5M4 20l6-6M10 19v-5H5"/></svg>Reduce<kbd>S</kbd>
+      </button>
+      <button data-tool="expand" title="Hold to push tissue outwards (augment)">
+        <svg viewBox="0 0 24 24"><path d="M10 10L4 4M4 9V4h5M14 14l6 6M20 15v5h-5M14 10l6-6M20 9V4h-5M10 14l-6 6M4 15v5h5"/></svg>Augment<kbd>E</kbd>
+      </button>
+      <button data-tool="restore" title="Hold to gradually return the area to the original photo">
+        <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>Restore<kbd>R</kbd>
+      </button>
+      <button data-tool="annotate" title="Click on the photo to add a numbered note">
+        <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.4-7-11a7 7 0 0 1 14 0c0 4.6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>Note<kbd>A</kbd>
+      </button>
+      <button data-tool="hand" title="Drag to move around the photo">
+        <svg viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 5a1.5 1.5 0 0 1 3 0v7M14 6.5a1.5 1.5 0 0 1 3 0V13M17 9.5a1.5 1.5 0 0 1 3 0V15c0 4-3 6-6.5 6S7 19 6 16L4.5 11.5a1.5 1.5 0 0 1 2.8-1L8 13"/></svg>Move<kbd>H</kbd>
+      </button>
+    </div>
+
+    <div class="tool-grid only-3d" id="toolGrid3d">
+      <button data-tool="orbit" class="active" title="Drag to rotate the head, wheel to zoom, right-drag to move">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M4 12c0 2 3.6 3.5 8 3.5s8-1.5 8-3.5M12 4v16"/><path d="M15 3.5l3 1-1 3"/></svg>Rotate<kbd>H</kbd>
+      </button>
+      <button data-tool="grab" title="Drag to pull the surface in the direction you move">
+        <svg viewBox="0 0 24 24"><path d="M4 12h13M13 6l6 6-6 6"/></svg>Grab<kbd>P</kbd>
+      </button>
+      <button data-tool="sub" title="Hold to lower the surface (reduce)">
+        <svg viewBox="0 0 24 24"><path d="M4 4l6 6M10 5v5H5M20 20l-6-6M14 19v-5h5M20 4l-6 6M14 5v5h5M4 20l6-6M10 19v-5H5"/></svg>Reduce<kbd>S</kbd>
+      </button>
+      <button data-tool="add" title="Hold to raise the surface (augment)">
+        <svg viewBox="0 0 24 24"><path d="M10 10L4 4M4 9V4h5M14 14l6 6M20 15v5h-5M14 10l6-6M20 9V4h-5M10 14l-6 6M4 15v5h5"/></svg>Augment<kbd>E</kbd>
+      </button>
+      <button data-tool="smooth" title="Hold to smooth the surface">
+        <svg viewBox="0 0 24 24"><path d="M3 15c3-6 6-6 9 0s6 6 9 0"/></svg>Smooth<kbd>M</kbd>
+      </button>
+      <button data-tool="restore" title="Hold to gradually return the area to the original shape">
+        <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>Restore<kbd>R</kbd>
+      </button>
+      <button data-tool="note" title="Click on the head to add a numbered note">
+        <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.4-7-11a7 7 0 0 1 14 0c0 4.6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>Note<kbd>A</kbd>
+      </button>
+    </div>
+    <label class="check only-3d"><input type="checkbox" id="symmetry" checked> Mirror left / right (symmetry)</label>
+
+    <div class="only-2d">
+      <label for="brush">Brush size <output id="brushVal">60</output> px</label>
+      <input type="range" id="brush" min="8" max="200" value="60">
+    </div>
+    <div class="only-3d">
+      <label for="brush3d">Brush size <output id="brush3dVal">18</output></label>
+      <input type="range" id="brush3d" min="5" max="50" value="18">
+    </div>
+    <label for="strength">Strength <output id="strengthVal">50</output>%</label>
+    <input type="range" id="strength" min="5" max="100" value="50">
+    <p class="hint only-2d">Tip: small brush + low strength gives the most natural result. Hold <kbd>Space</kbd> to peek at the original.</p>
+    <p class="hint only-3d">Rotate with the right mouse button or two fingers while sculpting. Hold <kbd>Space</kbd> to peek at the original.</p>
+
+    <h3>History</h3>
+    <div class="row">
+      <button id="btnUndo" disabled title="Undo (Ctrl+Z)">Undo</button>
+      <button id="btnRedo" disabled title="Redo (Ctrl+Shift+Z)">Redo</button>
+    </div>
+    <button id="btnReset" class="wide" title="Remove every edit on this photo">Reset this photo</button>
+
+    <h3>Reveal</h3>
+    <label for="morph">Morph amount <output id="morphVal">100</output>%</label>
+    <input type="range" id="morph" min="0" max="100" value="100">
+    <button id="btnPlay" class="wide" title="Animate from the original to the simulated result">▶ Play morph</button>
+
+    <h3>Zoom</h3>
+    <div class="row">
+      <button id="btnZoomOut" title="Zoom out">−</button>
+      <button id="btnFit" title="Fit to screen (F)"><span id="zoomVal">100%</span></button>
+      <button id="btnZoomIn" title="Zoom in">+</button>
+    </div>
+  </aside>
+
+  <!-- ───────── Stage ───────── -->
+  <section class="stage-wrap">
+    <div class="view-tabs" id="viewTabs"></div>
+    <div class="stage" id="stage">
+      <canvas id="canvas"></canvas>
+      <div class="divider" id="divider" hidden><span class="knob" title="Drag to compare">◀ ▶</span></div>
+      <div class="hint3d only-3d" id="hint3d" hidden></div>
+      <div class="empty only-2d" id="empty">
+        <div class="card">
+          <h2>Add the patient's photos</h2>
+          <p>Drop images here or</p>
+          <button id="btnAddFirst" class="primary">Choose photos…</button>
+          <ol>
+            <li>Use a front view and a profile view where possible. Plain background, neutral expression, hair away from the face.</li>
+            <li>Pick <strong>Push</strong>, <strong>Reduce</strong> or <strong>Augment</strong> and sculpt the planned change directly on the photo.</li>
+            <li>Compare with the slider, add notes, then print the summary or export the image.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+    <div class="compare-bar">
+      <span class="bar-label">Compare</span>
+      <div class="seg only-2d" id="compareSeg">
+        <button data-compare="slider" class="active">Slider</button>
+        <button data-compare="side">Side by side</button>
+        <button data-compare="fade">Fade</button>
+        <button data-compare="after">After only</button>
+      </div>
+      <div class="seg only-3d" id="compare3dSeg">
+        <button data-compare="after" class="active">After only</button>
+        <button data-compare="side">Side by side</button>
+      </div>
+      <span class="bar-label only-3d">View</span>
+      <div class="seg only-3d" id="viewSeg">
+        <button data-view="right">Right</button>
+        <button data-view="rightQ">¾ right</button>
+        <button data-view="front">Front</button>
+        <button data-view="leftQ">¾ left</button>
+        <button data-view="left">Left</button>
+      </div>
+      <label class="check only-3d"><input type="checkbox" id="autoRotate"> Auto-rotate</label>
+      <div id="fadeWrap" class="fade-wrap only-2d" hidden>
+        <input type="range" id="fade" min="0" max="100" value="100" aria-label="Fade between before and after">
+      </div>
+      <button id="btnPeek" class="peek" title="Hold to show the original (or hold Space)">Hold to show original</button>
+    </div>
+  </section>
+
+  <!-- ───────── Notes ───────── -->
+  <aside class="panel notes">
+    <h3>Patient &amp; procedure</h3>
+    <div class="row">
+      <div><label for="pName">Patient name</label><input id="pName" autocomplete="off" placeholder="Optional"></div>
+      <div><label for="pRef">Reference</label><input id="pRef" autocomplete="off" placeholder="Clinic ID"></div>
+    </div>
+    <label for="pDate">Consultation date</label>
+    <input type="date" id="pDate">
+    <label for="pProc">Procedure</label>
+    <select id="pProc"></select>
+    <div id="pOtherWrap" hidden>
+      <label for="pOther">Describe procedure</label>
+      <input id="pOther" placeholder="e.g. Revision rhinoplasty">
+    </div>
+
+    <div class="only-3d">
+      <h3>Avatar photos</h3>
+      <p class="hint">The photos are projected onto a generic head. Use <strong>Align</strong> so the eyes and chin match. Areas without a photo are shown in a neutral skin tone.</p>
+      <div class="role"><label for="role-front">Front</label><div class="row"><select id="role-front" data-role="front"></select><button data-align="front">Align…</button></div></div>
+      <div class="role"><label for="role-right">Right profile <span class="count">(nose points right)</span></label><div class="row"><select id="role-right" data-role="right"></select><button data-align="right">Align…</button></div></div>
+      <div class="role"><label for="role-left">Left profile <span class="count">(nose points left)</span></label><div class="row"><select id="role-left" data-role="left"></select><button data-align="left">Align…</button></div></div>
+    </div>
+
+    <h3>Planned changes</h3>
+    <textarea id="nPlan" placeholder="e.g. Reduce dorsal hump by ~2 mm, refine and slightly rotate the tip, narrow the nasal bones. Preserve ethnic character of the nose."></textarea>
+
+    <h3>Consultation notes</h3>
+    <textarea id="nConsult" placeholder="Patient goals, concerns discussed, limitations explained, recovery expectations…"></textarea>
+
+    <h3>Photo notes <span class="count" id="pinCount"></span></h3>
+    <p class="hint" id="pinHint">Choose the <strong>Note</strong> tool and click on the photo or head to pin a numbered note.</p>
+    <div class="pin-list" id="pinList"></div>
+
+    <h3>Disclaimer shown on exports</h3>
+    <textarea id="nDisclaimer"></textarea>
+    <p class="hint">Nothing is sent to a server. The current case is kept in this browser until you start a new one. Use <strong>Save case</strong> to keep a file in the patient record.</p>
+  </aside>
+
+</main>
+
+<input type="file" id="filePhotos" accept="image/*" multiple hidden>
+<input type="file" id="fileCase" accept=".json,application/json" hidden>
+<div class="modal" id="alignModal" hidden>
+  <div class="modal-card">
+    <h2 id="alignTitle">Align photo</h2>
+    <p class="hint">Drag the outline over the face and change its size until the <strong>eye</strong> and <strong>chin</strong> lines match the photo. Use the mouse wheel to resize.</p>
+    <canvas id="alignCanvas"></canvas>
+    <div class="modal-row">
+      <label class="inline">Size <input type="range" id="alignSize" min="10" max="80" value="26"></label>
+      <label class="check inline"><input type="checkbox" id="alignFlip"> Flip photo</label>
+      <button id="alignReset">Reset</button>
+      <span class="spacer"></span>
+      <button id="alignCancel">Cancel</button>
+      <button id="alignDone" class="primary">Done</button>
+    </div>
+  </div>
+</div>
+<section id="printArea" class="print-only" aria-hidden="true"></section>
+
+<script src="app.js"></script>
+<script type="module" src="avatar.js"></script>
+</body>
+</html>

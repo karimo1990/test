@@ -169,3 +169,33 @@ normally rather than staying at `opacity: 0`.
 **Browser support.** Modern evergreen browsers. Uses CSS nesting-free plain CSS, custom
 properties, `clamp()`, `aspect-ratio`, `clip-path` and `grid-template-rows` transitions for
 the accordion.
+
+---
+
+## Morph Studio (`morph-studio/`)
+
+A separate, self-contained tool for facial surgeons: a before / after simulation aid for
+rhinoplasty and similar procedures, used during consultation to set expectations.
+Open `morph-studio/index.html` in a modern browser (Chrome, Edge, Safari, Firefox; works on
+an iPad). Nothing is uploaded anywhere — photos, edits and notes stay on the device.
+
+**Photo morph** — upload the patient's photos (front, profiles), then sculpt the planned
+change directly on the photo with Push / Reduce / Augment / Restore brushes. Compare with a
+slider, side by side, a fade, a morph animation, or by holding *Space* to peek at the original.
+
+**3D avatar** — a rotatable head built from the same photos (front, right and left profile
+are projected onto a generic head mesh; use *Align* to match the eyes and chin). Drag to
+rotate, wheel to zoom, and sculpt with Grab / Reduce / Augment / Smooth / Restore, with
+left-right symmetry on by default. View presets, auto-rotate and side-by-side before/after.
+
+**Consultation record** — patient name / reference / date / procedure, planned changes,
+consultation notes, numbered notes pinned to the photo or the head, and an editable
+disclaimer. *Print summary* produces a printable (or save-as-PDF) sheet with before/after
+images from every photo and five angles of the avatar, notes and signature lines.
+*Export image* downloads a labelled before/after PNG. *Save case* downloads a `.json` file
+that can be reopened later; the current case is also kept in the browser (IndexedDB) so an
+accidental refresh loses nothing.
+
+Files: `index.html`, `styles.css`, `app.js` (2D warp engine, notes, save/print/export),
+`avatar.js` (3D head, texture projection, sculpting) and a vendored copy of
+[three.js](https://threejs.org) r170 (MIT) in `vendor/three/` so it also works offline.
