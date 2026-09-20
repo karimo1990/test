@@ -184,19 +184,27 @@ an iPad). Nothing is uploaded anywhere — photos, edits and notes stay on the d
 change directly on the photo with Push / Reduce / Augment / Restore brushes. Compare with a
 slider, side by side, a fade, a morph animation, or by holding *Space* to peek at the original.
 
-**3D avatar** — a rotatable head built from the same photos (front, right and left profile
-are projected onto a generic head mesh; use *Align* to match the eyes and chin). Drag to
-rotate, wheel to zoom, and sculpt with Grab / Reduce / Augment / Smooth / Restore, with
-left-right symmetry on by default. View presets, auto-rotate and side-by-side before/after.
+**3D avatar** — a rotatable, to-scale 3D model of the patient. Load a realistic model
+(`.glb`) produced from the patient's photo by an image-to-3D service (Tripo, Meshy,
+Hunyuan3D…) or a phone scanning app; without one, the photos are projected onto a generic
+head. Drag to rotate, wheel to zoom, view presets, auto-rotate. Sculpt with Grab / Reduce /
+Augment / Smooth / Restore (left-right symmetry on by default). Compare after-only, side by
+side, a ghost overlay of the original, a morph slider, or hold Space. **Scale**: measure any
+two points in millimetres, calibrate against a known distance (e.g. pupil to pupil), brush
+size shown in mm, a scale bar, and measurements that update live to show the before/after
+change.
 
 **Consultation record** — patient name / reference / date / procedure, planned changes,
-consultation notes, numbered notes pinned to the photo or the head, and an editable
+consultation notes, numbered notes pinned to the photo or the head, letters and documents
+sent to the patient (PDF, Word, images, text — previewed in the app), and an editable
 disclaimer. *Print summary* produces a printable (or save-as-PDF) sheet with before/after
-images from every photo and five angles of the avatar, notes and signature lines.
-*Export image* downloads a labelled before/after PNG. *Save case* downloads a `.json` file
-that can be reopened later; the current case is also kept in the browser (IndexedDB) so an
-accidental refresh loses nothing.
+images from every photo, five angles of the avatar with a measurement table, notes, the
+document list and signature lines. *Export image* downloads a labelled before/after PNG.
+*Save case* downloads a `.json` file (including the 3D model and documents) that can be
+reopened later; the current case is also kept in the browser (IndexedDB) so an accidental
+refresh loses nothing.
 
 Files: `index.html`, `styles.css`, `app.js` (2D warp engine, notes, save/print/export),
-`avatar.js` (3D head, texture projection, sculpting) and a vendored copy of
-[three.js](https://threejs.org) r170 (MIT) in `vendor/three/` so it also works offline.
+`avatar.js` (3D model loading, generic head, texture projection, sculpting, measurements)
+and a vendored copy of [three.js](https://threejs.org) r170 (MIT) in `vendor/three/` so it
+also works offline.

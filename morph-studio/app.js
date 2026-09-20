@@ -60,6 +60,8 @@ const el = {
   brush3d: $('#brush3d'), brush3dVal: $('#brush3dVal'), symmetry: $('#symmetry'), autoRotate: $('#autoRotate'), hint3d: $('#hint3d'),
   alignModal: $('#alignModal'), alignCanvas: $('#alignCanvas'), alignTitle: $('#alignTitle'), alignSize: $('#alignSize'), alignFlip: $('#alignFlip'),
   docs: $('#docs'), docList: $('#docList'), docCount: $('#docCount'), fileDocs: $('#fileDocs'),
+  fileModel: $('#fileModel'), modelStatus: $('#modelStatus'), btnRemoveModel: $('#btnRemoveModel'), turnRow: $('#turnRow'), photoRoles: $('#photoRoles'),
+  scaleStatus: $('#scaleStatus'), measureList: $('#measureList'), btnClearMeasures: $('#btnClearMeasures'), scalebar: $('#scalebar'),
   docModal: $('#docModal'), docTitle: $('#docTitle'), docBody: $('#docBody'), docDownload: $('#docDownload'),
 };
 const is3d = () => state.mode === '3d';
@@ -73,8 +75,11 @@ async function ensureAvatar() {
     const A = AV();
     A.onDirty = markDirty; A.onHistory = updateHistoryButtons; A.onStatus = setStatus;
     A.onPins = focus => { if (is3d()) { renderPinList(); if (focus) focusPin(A.selectedPin); } };
+    A.onModel = () => { renderModelPanel(); renderRoleSelects(); updateBrushLabel(); };
+    A.onMeasure = () => renderMeasures();
     A.init(el.stage);
     A.brush = +el.brush3d.value / 100; A.strength = state.strength / 100; A.symmetry = el.symmetry.checked;
+    renderModelPanel(); renderMeasures(); updateBrushLabel();
   }
   return AV();
 }
@@ -488,7 +493,8 @@ function setTool3d(t) {
   if (avatarInited) AV().setTool(t);
 }
 $('#toolGrid3d').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setTool3d(b.dataset.tool); });
-el.brush3d.addEventListener('input', () => { el.brush3dVal.textContent = el.brush3d.value; if (avatarInited) AV().brush = +el.brush3d.value / 100; });
+function updateBrushLabel() { const units = +el.brush3d.value / 100; el.brush3dVal.textContent = avatarInited ? `${Math.round(units * AV().mmPerUnit)} mm` : el.brush3d.value; }
+el.brush3d.addEventListener('input', () => { if (avatarInited) AV().brush = +el.brush3d.value / 100; updateBrushLabel(); });
 el.symmetry.addEventListener('change', () => { if (avatarInited) AV().symmetry = el.symmetry.checked; });
 el.autoRotate.addEventListener('change', () => { if (avatarInited) AV().setAutoRotate(el.autoRotate.checked); });
 $('#compare3dSeg').addEventListener('click', e => {
@@ -558,6 +564,7 @@ document.addEventListener('keydown', e => {
     case 'm': case 'M': if (is3d()) setTool3d('smooth'); break;
     case 'r': case 'R': is3d() ? setTool3d('restore') : setTool('restore'); break;
     case 'a': case 'A': is3d() ? setTool3d('note') : setTool('annotate'); break;
+    case 'd': case 'D': if (is3d()) setTool3d('measure'); break;
     case 'h': case 'H': is3d() ? setTool3d('orbit') : setTool('hand'); break;
     case 'f': case 'F': $('#btnFit').click(); break;
     case '[': { const r = is3d() ? el.brush3d : el.brush; r.value = +r.value - (is3d() ? 2 : 5); r.dispatchEvent(new Event('input')); break; }
@@ -645,7 +652,7 @@ function renderRoleSelects() {
   }
   if (avatarInited) {
     const A = AV(), missing = ROLES.filter(r => !A.photos[r]);
-    el.hint3d.hidden = !(missing.length === 3);
+    el.hint3d.hidden = !(missing.length === 3) || (A.model && A.model.kind === 'glb');
     el.hint3d.textContent = state.views.length ? 'No photo assigned yet — choose the front and profile photos under "Avatar photos".' : 'Add the patient\'s photos (Photo morph tab or "+ Add photo") to dress the avatar. You can sculpt the generic head right away.';
   }
 }
@@ -872,7 +879,7 @@ async function restore(data) {
   }
   state.current = state.views.length ? 0 : -1; state.selectedPin = -1;
   pendingAvatar = data.avatar || null;
-  if (avatarInited) { AV().restore(pendingAvatar, i => state.views[i] || null); pendingAvatar = null; if (is3d()) autoAssignRoles(); }
+  if (avatarInited) { await AV().restore(pendingAvatar, i => state.views[i] || null); pendingAvatar = null; if (is3d()) autoAssignRoles(); }
   syncFields(); renderTabs(); renderPinList(); updateHistoryButtons(); setMorph(1, false); fit(); draw();
 }
 
@@ -1000,7 +1007,7 @@ function composeSheet(beforeImg, afterImg, label, filename) {
 /* ───────────────────────── Print summary ───────────────────────── */
 $('#btnPrint').addEventListener('click', () => {
   const A = avatarInited ? AV() : null;
-  const has3d = A && (A.hasEdits() || ROLES.some(r => A.photos[r]));
+  const has3d = A && (A.hasEdits() || ROLES.some(r => A.photos[r]) || (A.model && A.model.kind === 'glb'));
   if (!state.views.length && !has3d && !state.docs.length) return alert('Add a photo or a document first.');
   if (state.morph < 1) { setMorph(1, true); draw(); }
   const meta = [state.patient.name && `Patient: ${esc(state.patient.name)}`, state.patient.ref && `Ref: ${esc(state.patient.ref)}`, state.patient.date && `Date: ${esc(state.patient.date)}`, `Procedure: ${esc(procedureLabel())}`].filter(Boolean).join(' &nbsp;·&nbsp; ');
@@ -1021,6 +1028,10 @@ $('#btnPrint').addEventListener('click', () => {
         <figure><img src="${A.snapshot('after', preset, 700).toDataURL('image/jpeg', 0.88)}" alt="Simulated after, ${name}"><figcaption>${name} — simulated after</figcaption></figure></div>`;
     }
     if (A.pins.length) html += `<ol>${A.pins.map(p => `<li>${esc(p.text) || '<em>(no text)</em>'}</li>`).join('')}</ol>`;
+    if (A.measures.length) {
+      const src = { calibrated: 'calibrated by the surgeon', file: 'taken from the model file', assumed: 'assumed — not calibrated' }[A.scaleSource] || A.scaleSource;
+      html += `<p><strong>Measurements</strong> (scale ${src})</p><table><tr><th>#</th><th>Before</th><th>Simulated after</th><th>Change</th></tr>${A.measures.map((m, i) => { const v = A.measureValues(i); return `<tr><td>${i + 1}</td><td>${v.before.toFixed(1)} mm</td><td>${v.after.toFixed(1)} mm</td><td>${(v.after - v.before >= 0 ? '+' : '') + (v.after - v.before).toFixed(1)} mm</td></tr>`; }).join('')}</table>`;
+    }
     html += '</section>';
   }
   if (state.notes.plan.trim()) html += `<h2>Planned changes</h2><p>${esc(state.notes.plan)}</p>`;
@@ -1041,6 +1052,76 @@ window.addEventListener('afterprint', () => { el.printArea.innerHTML = ''; });
 /* ───────────────────────── Boot ───────────────────────── */
 new ResizeObserver(() => { const had = !!currentView(); resizeCanvas(); if (had) draw(); if (avatarInited) AV().resize(); }).observe(el.stage);
 
+/* ───────────────────────── 3D model, scale & measurements ───────────────────────── */
+function renderModelPanel() {
+  if (!avatarInited) return;
+  const A = AV(), info = A.modelInfo(); if (!info) return;
+  const glb = info.kind === 'glb';
+  el.modelStatus.innerHTML = glb
+    ? `${esc(info.name)}<span class="sub">${info.faces.toLocaleString()} faces · ${(info.bytes / 1048576).toFixed(1)} MB · realistic model of the patient</span>`
+    : `Generic head<span class="sub">no patient model loaded — photos are projected onto a standard head shape</span>`;
+  el.btnRemoveModel.hidden = !glb; el.turnRow.hidden = !glb; el.photoRoles.hidden = glb;
+  const src = { calibrated: 'Calibrated by you', file: 'Scale read from the model file', assumed: 'Scale assumed (typical head size) — calibrate for accurate millimetres' }[info.scaleSource] || info.scaleSource;
+  el.scaleStatus.innerHTML = `${src}<span class="sub">1 mm on the patient = ${(1 / info.mmPerUnit).toFixed(4)} model units</span>`;
+  $('#btnReset').textContent = is3d() ? (glb ? 'Reset model edits' : 'Reset avatar') : 'Reset this photo';
+  if (el.hint3d) el.hint3d.hidden = glb || !el.hint3d.textContent;
+}
+function renderMeasures() {
+  if (!avatarInited) return;
+  const A = AV();
+  el.measureList.innerHTML = '';
+  el.btnClearMeasures.hidden = !A.measures.length;
+  if (A.pendingPoint) { const p = document.createElement('div'); p.className = 'hint'; p.textContent = 'First point set — click the second point on the head.'; el.measureList.appendChild(p); }
+  A.measures.forEach((m, i) => {
+    const v = A.measureValues(i); if (!v) return;
+    const row = document.createElement('div'); row.className = 'measure';
+    const delta = v.after - v.before;
+    row.innerHTML = `<span class="num">${i + 1}</span><span class="val"><strong>${v.after.toFixed(1)} mm</strong> ${Math.abs(delta) >= 0.05 ? `<small>was ${v.before.toFixed(1)} mm (${delta >= 0 ? '+' : ''}${delta.toFixed(1)})</small>` : ''}</span><button class="cal" title="Enter the real distance to calibrate the scale">Set as…</button><button class="x" title="Remove">×</button>`;
+    row.querySelector('.cal').addEventListener('click', () => {
+      const ans = prompt('Real distance between these two points on the patient, in millimetres:', v.before.toFixed(0));
+      const mmv = parseFloat(ans); if (!(mmv > 0)) return;
+      if (A.calibrate(i, mmv)) setStatus(`Scale calibrated: measurement ${i + 1} = ${mmv} mm`);
+    });
+    row.querySelector('.x').addEventListener('click', () => A.deleteMeasure(i));
+    el.measureList.appendChild(row);
+  });
+}
+el.btnClearMeasures.addEventListener('click', () => { if (avatarInited && confirm('Remove all measurements?')) AV().clearMeasures(); });
+let measureTimer = 0;
+setInterval(() => { if (is3d() && avatarInited && !el.measureList.matches(':hover')) { const A = AV(); if (A.measures.length && A.hasEdits()) renderMeasures(); } }, 700);
+
+async function loadModelFile(file) {
+  if (!file) return;
+  if (!/\.(glb|gltf)$/i.test(file.name)) { alert('Please choose a .glb or .gltf 3D model.'); return; }
+  if (file.size > 120 * 1024 * 1024) { alert('This model is larger than 120 MB. Please export a lighter version.'); return; }
+  setStatus(`Loading ${file.name}…`);
+  try {
+    const A = await ensureAvatar();
+    await A.loadGLB(await file.arrayBuffer(), file.name);
+    if (!is3d()) await setMode('3d');
+    A.resetView();
+    setStatus(`3D model loaded: ${file.name}. Use Measure + "Set as…" to calibrate the scale.`);
+  } catch (e) { alert('Could not load this 3D model: ' + (e.message || e)); setStatus('Model not loaded'); }
+}
+$('#btnLoadModel').addEventListener('click', () => el.fileModel.click());
+el.fileModel.addEventListener('change', () => { loadModelFile(el.fileModel.files[0]); el.fileModel.value = ''; });
+el.btnRemoveModel.addEventListener('click', () => { if (avatarInited && confirm('Remove the 3D model and go back to the generic head? Edits on the model are lost.')) { AV().removeModel(); autoAssignRoles(); } });
+$$('#turnRow button').forEach(b => b.addEventListener('click', () => { const [axis, q] = b.dataset.turn.split(':'); if (avatarInited) AV().turnModel(axis, +q); }));
+// Drop a .glb anywhere on the stage.
+el.stage.addEventListener('drop', e => {
+  const f = Array.from(e.dataTransfer?.files || []).find(f => /\.(glb|gltf)$/i.test(f.name));
+  if (f) { e.stopImmediatePropagation(); loadModelFile(f); }
+}, true);
+// Scale bar (kept in sync with the camera distance while the 3D view is open).
+(function scaleLoop() {
+  if (is3d() && avatarInited) {
+    const A = AV(), px = A.pxPerMm();
+    let mmLen = 20; if (px * mmLen > 220) mmLen = 10; if (px * mmLen > 220) mmLen = 5; if (px * mmLen < 40) mmLen = 50; if (px * mmLen < 40) mmLen = 100;
+    el.scalebar.hidden = false; el.scalebar.querySelector('.bar').style.width = Math.round(px * mmLen) + 'px'; el.scalebar.querySelector('span').textContent = `${mmLen} mm${A.scaleSource === 'assumed' ? ' (approx.)' : ''}`;
+  } else el.scalebar.hidden = true;
+  requestAnimationFrame(scaleLoop);
+})();
+
 /* ───────────────────────── Mode switch (2D photos / 3D avatar) ───────────────────────── */
 async function setMode(mode) {
   if (mode === state.mode) return;
@@ -1050,7 +1131,7 @@ async function setMode(mode) {
     const A = await ensureAvatar();
     if (!A.available) { alert(A.error || '3D is not available in this browser.'); setStatus(A.error || '3D unavailable'); return; }
     state.mode = '3d'; document.body.dataset.mode = '3d';
-    if (pendingAvatar) { A.restore(pendingAvatar, i => state.views[i] || null); pendingAvatar = null; }
+    if (pendingAvatar) { await A.restore(pendingAvatar, i => state.views[i] || null); pendingAvatar = null; }
     autoAssignRoles();
     el.canvas.style.display = 'none'; el.divider.hidden = true; A.show(true);
     A.setTool($('#toolGrid3d button.active')?.dataset.tool || 'orbit');
@@ -1141,5 +1222,5 @@ syncFields(); renderTabs(); renderPinList(); renderDocs(); setTool('push'); setC
 })();
 
 // Small test hook (not used by the UI).
-window.__morph = { state, addPhotos, addDocs, serialize, restore, dab, renderAll, currentView, fit, draw, setMode, ensureAvatar, openAlign };
+window.__morph = { state, addPhotos, addDocs, loadModelFile, serialize, restore, dab, renderAll, currentView, fit, draw, setMode, ensureAvatar, openAlign };
 })();

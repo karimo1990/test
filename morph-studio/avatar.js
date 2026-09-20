@@ -1,8 +1,11 @@
 /* Morph Studio — 3D avatar module.
-   A parametric head mesh textured with the patient's front / profile photos, which the
-   surgeon can rotate freely and sculpt. Exposes window.Avatar3D for app.js. */
+   Shows either a realistic 3D model of the patient (a GLB produced by an image-to-3D
+   service or a phone scan) or, as a fallback, a generic head textured with the patient's
+   photos. The surgeon can rotate it freely and sculpt it. Exposes window.Avatar3D. */
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
+import { GLTFLoader } from './vendor/three/GLTFLoader.js';
+import { mergeVertices } from './vendor/three/BufferGeometryUtils.js';
 
 const SEG_U = 192, SEG_V = 128, COLS = SEG_U + 1, NV = COLS * (SEG_V + 1);
 const TEX = 2048;
@@ -10,6 +13,7 @@ const R = { x: 0.72, y: 0.98, z: 0.82 };
 const HEAD_V = 0.8;
 const DISP_Q = 16000;
 const HISTORY_LIMIT = 40;
+const MODEL_HEIGHT = 2.3;           // loaded models are scaled to this height (head units)
 const GUIDES = [['Brow', 0.24], ['Eyes', 0.09], ['Nose tip', -0.14], ['Mouth', -0.44], ['Chin', -0.86]];
 const PRESETS = { front: 0, rightQ: -40, right: -90, leftQ: 40, left: 90 };
 const DEFAULT_SKIN = [214, 172, 152];
@@ -18,7 +22,7 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const gauss = (d, s) => Math.exp(-(d * d) / (2 * s * s));
 const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 
-/* ───────────── Head shape ───────────── */
+/* ───────────── Generic head shape ───────────── */
 function headPoint(u, v, out) {
   const theta = (u - 0.5) * Math.PI * 2;
   let x, y, z;
@@ -39,16 +43,16 @@ function headPoint(u, v, out) {
     const tip = 0.2 * gauss(x, 0.055) * gauss(y + 0.14, 0.07);
     const alae = 0.09 * gauss(ax - 0.085, 0.035) * gauss(y + 0.18, 0.035);
     let dz = Math.max(bridge, tip, alae);
-    dz += 0.035 * gauss(y - 0.24, 0.05) * smooth(0.55, 0.15, ax);          // brow ridge
-    dz -= 0.045 * gauss(ax - 0.26, 0.09) * gauss(y - 0.09, 0.055);         // eye sockets
-    dz += 0.03 * gauss(ax - 0.42, 0.1) * gauss(y + 0.02, 0.09);            // cheekbones
-    dz += 0.03 * gauss(y + 0.44, 0.045) * smooth(0.28, 0.1, ax);           // lips
-    dz += 0.07 * gauss(x, 0.14) * gauss(y + 0.82, 0.09);                   // chin
+    dz += 0.035 * gauss(y - 0.24, 0.05) * smooth(0.55, 0.15, ax);
+    dz -= 0.045 * gauss(ax - 0.26, 0.09) * gauss(y - 0.09, 0.055);
+    dz += 0.03 * gauss(ax - 0.42, 0.1) * gauss(y + 0.02, 0.09);
+    dz += 0.03 * gauss(y + 0.44, 0.045) * smooth(0.28, 0.1, ax);
+    dz += 0.07 * gauss(x, 0.14) * gauss(y + 0.82, 0.09);
     z += dz * facing;
   }
   out.set(x, y, z);
 }
-function buildBase() {
+function buildGenericGeometry() {
   const pos = new Float32Array(NV * 3), uv = new Float32Array(NV * 2), p = new THREE.Vector3();
   for (let j = 0; j <= SEG_V; j++) for (let i = 0; i <= SEG_U; i++) {
     const k = j * COLS + i;
@@ -61,7 +65,12 @@ function buildBase() {
     const a = j * COLS + i, b = a + 1, c = a + COLS, d = c + 1;
     idx[n++] = a; idx[n++] = c; idx[n++] = b; idx[n++] = b; idx[n++] = c; idx[n++] = d;
   }
-  return { pos, uv, idx };
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.computeVertexNormals();
+  return geo;
 }
 
 /* ───────────── Module state ───────────── */
@@ -73,22 +82,26 @@ const A = {
   align: { front: null, right: null, left: null },
   pins: [], selectedPin: -1,
   history: [], redo: [],
-  onDirty: () => {}, onHistory: () => {}, onPins: () => {}, onStatus: () => {},
+  model: null,                       // { kind, name, glb, parts, faces }
+  mmPerUnit: 117, scaleSource: 'assumed',   // real-world scale of the model
+  measures: [], pendingPoint: null,          // distance measurements anchored to vertices
+  onDirty: () => {}, onHistory: () => {}, onPins: () => {}, onStatus: () => {}, onModel: () => {}, onMeasure: () => {},
   GUIDES, PRESETS,
 };
-let stage, renderer, scene, camera, controls, afterMesh, beforeMesh, geo, beforeGeo, material, texture, texCanvas;
-let base, cur, disp, ring, pinGroup, off, loopOn = false;
-let stroke = null, hoverHit = null;
+let stage, renderer, scene, camera, controls, afterGroup, beforeGroup, ring, pinGroup, off, loopOn = false;
+let genericMaterial, texture, texCanvas, genericGeo;
+let stroke = null, hoverHit = null, measureGroup, ghostMaterial;
 const raycaster = new THREE.Raycaster();
 const pointerIds = new Set();
 const pinSprites = [];
+const parts = () => (A.model ? A.model.parts : []);
+const isGeneric = () => !A.model || A.model.kind === 'generic';
 
 /* ───────────── Init ───────────── */
 A.init = function (stageEl) {
   stage = stageEl;
-  try {
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  } catch (e) { A.error = 'WebGL is not available in this browser.'; A.ready = true; return false; }
+  try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); }
+  catch (e) { A.error = 'WebGL is not available in this browser.'; A.ready = true; return false; }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setClearColor(0xd9dee5, 1);
   renderer.domElement.id = 'gl';
@@ -103,35 +116,26 @@ A.init = function (stageEl) {
   const key = new THREE.DirectionalLight(0xffffff, 1.5); key.position.set(0.9, 1.1, 2.2); camera.add(key);
   const rim = new THREE.DirectionalLight(0xffffff, 0.35); rim.position.set(-2, 1, -2); scene.add(rim);
 
-  const b = buildBase();
-  base = b.pos; cur = base.slice(); disp = base.slice();
-  geo = new THREE.BufferGeometry();
-  geo.setIndex(new THREE.BufferAttribute(b.idx, 1));
-  geo.setAttribute('position', new THREE.BufferAttribute(disp, 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(b.uv, 2));
-  geo.computeVertexNormals();
-  beforeGeo = new THREE.BufferGeometry();
-  beforeGeo.setIndex(new THREE.BufferAttribute(b.idx, 1));
-  beforeGeo.setAttribute('position', new THREE.BufferAttribute(base, 3));
-  beforeGeo.setAttribute('uv', new THREE.BufferAttribute(b.uv, 2));
-  beforeGeo.computeVertexNormals();
+  afterGroup = new THREE.Group(); beforeGroup = new THREE.Group();
+  scene.add(afterGroup, beforeGroup);
 
   texCanvas = document.createElement('canvas'); texCanvas.width = texCanvas.height = TEX;
   texture = new THREE.CanvasTexture(texCanvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-  material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.82, metalness: 0 });
-  afterMesh = new THREE.Mesh(geo, material); scene.add(afterMesh);
-  beforeMesh = new THREE.Mesh(beforeGeo, material); scene.add(beforeMesh);
+  genericMaterial = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.82, metalness: 0 });
+  genericGeo = buildGenericGeometry();
 
   ring = new THREE.Mesh(new THREE.RingGeometry(0.94, 1, 64), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }));
   ring.renderOrder = 10; ring.visible = false; scene.add(ring);
   pinGroup = new THREE.Group(); scene.add(pinGroup);
+  measureGroup = new THREE.Group(); scene.add(measureGroup);
+  ghostMaterial = new THREE.MeshBasicMaterial({ color: 0x1fb6c1, transparent: true, opacity: 0.32, depthWrite: false, side: THREE.DoubleSide });
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, -0.15, 0);
   controls.enableDamping = true; controls.dampingFactor = 0.12;
-  controls.minDistance = 1.6; controls.maxDistance = 14;
+  controls.minDistance = 1.2; controls.maxDistance = 14;
   controls.autoRotateSpeed = 1.6;
   controls.update();
 
@@ -142,8 +146,8 @@ A.init = function (stageEl) {
   dom.addEventListener('pointercancel', onUp);
   dom.addEventListener('pointerleave', () => { hoverHit = null; ring.visible = false; });
 
+  useGenericModel();
   A.setTool('orbit');
-  bake();
   A.available = true; A.ready = true;
   return true;
 };
@@ -161,38 +165,221 @@ A.resize = function () {
   renderer.domElement.style.width = '100%'; renderer.domElement.style.height = '100%';
 };
 
+/* ───────────── Models (generic head or loaded GLB) ───────────── */
+function buildAdjacency(geo) {
+  const idx = geo.index.array, n = geo.attributes.position.count, deg = new Uint32Array(n);
+  for (let i = 0; i < idx.length; i += 3) { deg[idx[i]] += 2; deg[idx[i + 1]] += 2; deg[idx[i + 2]] += 2; }
+  const start = new Uint32Array(n + 1); for (let i = 0; i < n; i++) start[i + 1] = start[i] + deg[i];
+  const fill = new Uint32Array(n), list = new Uint32Array(start[n]);
+  const add = (a, b) => { list[start[a] + fill[a]++] = b; };
+  for (let i = 0; i < idx.length; i += 3) { const a = idx[i], b = idx[i + 1], c = idx[i + 2]; add(a, b); add(a, c); add(b, a); add(b, c); add(c, a); add(c, b); }
+  return { start, list };
+}
+function makePart(geo, material) {
+  const base = geo.attributes.position.array.slice();
+  const mesh = new THREE.Mesh(geo, material);
+  const beforeGeo = new THREE.BufferGeometry();
+  beforeGeo.setIndex(geo.index);
+  beforeGeo.setAttribute('position', new THREE.BufferAttribute(base, 3));
+  for (const name of ['uv', 'color', 'uv1']) if (geo.attributes[name]) beforeGeo.setAttribute(name, geo.attributes[name]);
+  beforeGeo.computeVertexNormals();
+  const beforeMesh = new THREE.Mesh(beforeGeo, material);
+  return { geo, mesh, beforeMesh, base, cur: base.slice(), adj: buildAdjacency(geo), n: geo.attributes.position.count };
+}
+function clearModel() {
+  for (const p of parts()) { afterGroup.remove(p.mesh); beforeGroup.remove(p.beforeMesh); p.beforeMesh.geometry.dispose(); if (A.model.kind !== 'generic') { p.geo.dispose(); disposeMaterial(p.mesh.material); } }
+  A.model = null; A.history = []; A.redo = []; A.pins = []; A.selectedPin = -1; rebuildPinSprites();
+}
+function disposeMaterial(m) {
+  for (const mat of Array.isArray(m) ? m : [m]) { for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) if (mat[k]) mat[k].dispose(); mat.dispose(); }
+}
+function useGenericModel() {
+  clearModel();
+  const geo = genericGeo.clone();
+  geo.setAttribute('position', new THREE.BufferAttribute(genericGeo.attributes.position.array.slice(), 3));
+  geo.computeVertexNormals();
+  const part = makePart(geo, genericMaterial);
+  A.model = { kind: 'generic', name: 'Generic head', glb: null, parts: [part], faces: geo.index.count / 3 };
+  A.mmPerUnit = 117; A.scaleSource = 'assumed'; clearMeasures();
+  afterGroup.add(part.mesh); beforeGroup.add(part.beforeMesh);
+  bake();
+  A.onModel(); A.onHistory(); A.onPins(false);
+}
+/* Load a GLB/GLTF (ArrayBuffer). The model is centred, scaled to head units and made sculptable. */
+A.loadGLB = function (buffer, name = 'model.glb') {
+  return new Promise((resolve, reject) => {
+    new GLTFLoader().parse(buffer, '', gltf => {
+      try {
+        const root = gltf.scene; root.updateMatrixWorld(true);
+        const meshes = []; root.traverse(o => { if (o.isMesh && o.geometry && o.geometry.attributes.position) meshes.push(o); });
+        if (!meshes.length) throw new Error('The file contains no mesh.');
+        const geos = meshes.map(m => {
+          let g = m.geometry.clone();
+          for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv', 'color'].includes(k)) g.deleteAttribute(k);
+          g.morphAttributes = {};
+          g.applyMatrix4(m.matrixWorld);
+          if (!g.index) g = mergeVertices(g, 1e-6);
+          return g;
+        });
+        const box = new THREE.Box3(); geos.forEach(g => { g.computeBoundingBox(); box.union(g.boundingBox); });
+        const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
+        const s = MODEL_HEIGHT / Math.max(size.y, 1e-6);
+        // Guess the real-world scale from the file's units (metres or millimetres); the surgeon can calibrate.
+        let mmPerUnit = 280 / MODEL_HEIGHT, scaleSource = 'assumed';
+        if (size.y > 0.12 && size.y < 0.7) { mmPerUnit = size.y * 1000 / MODEL_HEIGHT; scaleSource = 'file'; }
+        else if (size.y > 120 && size.y < 700) { mmPerUnit = size.y / MODEL_HEIGHT; scaleSource = 'file'; }
+        const m4 = new THREE.Matrix4().makeScale(s, s, s).multiply(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z));
+        geos.forEach(g => { g.applyMatrix4(m4); g.computeVertexNormals(); });
+        clearModel();
+        const newParts = geos.map((g, i) => {
+          const src = meshes[i].material, mat = (Array.isArray(src) ? src[0] : src).clone();
+          mat.side = THREE.FrontSide;
+          if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
+          return makePart(g, mat);
+        });
+        let faces = 0; newParts.forEach(p => { faces += p.geo.index.count / 3; afterGroup.add(p.mesh); beforeGroup.add(p.beforeMesh); });
+        A.model = { kind: 'glb', name, glb: buffer, parts: newParts, faces, turns: [] };
+        A.mmPerUnit = mmPerUnit; A.scaleSource = scaleSource; clearMeasures();
+        A.resetView();
+        A.onModel(); A.onHistory(); A.onPins(false); A.onDirty();
+        resolve(A.model);
+      } catch (e) { reject(e); }
+    }, err => reject(err instanceof Error ? err : new Error('Could not read this 3D file.')));
+  });
+};
+A.removeModel = function () { useGenericModel(); A.onDirty(); };
+/* Rotate a loaded model in 90° steps around an axis (bakes into the base shape, clears edits). */
+function applyTurn(axis, quarterTurns) {
+  const m4 = new THREE.Matrix4();
+  if (axis === 'y') m4.makeRotationY(quarterTurns * Math.PI / 2); else if (axis === 'x') m4.makeRotationX(quarterTurns * Math.PI / 2); else m4.makeRotationZ(quarterTurns * Math.PI / 2);
+  for (const p of parts()) {
+    const v = new THREE.Vector3();
+    for (let i = 0; i < p.base.length; i += 3) { v.set(p.base[i], p.base[i + 1], p.base[i + 2]).applyMatrix4(m4); p.base[i] = v.x; p.base[i + 1] = v.y; p.base[i + 2] = v.z; }
+    p.cur.set(p.base); p.geo.attributes.position.array.set(p.base);
+    p.geo.attributes.position.needsUpdate = true; p.geo.computeVertexNormals();
+    p.beforeMesh.geometry.attributes.position.needsUpdate = true; p.beforeMesh.geometry.computeVertexNormals();
+  }
+}
+A.turnModel = function (axis, quarterTurns) {
+  if (isGeneric()) return;
+  applyTurn(axis, quarterTurns);
+  A.model.turns.push({ axis, q: quarterTurns });
+  A.history = []; A.redo = []; A.morph = 1;
+  A.onHistory(); A.onDirty();
+};
+A.modelInfo = () => (A.model ? { kind: A.model.kind, name: A.model.name, faces: Math.round(A.model.faces), bytes: A.model.glb ? A.model.glb.byteLength : 0, mmPerUnit: A.mmPerUnit, scaleSource: A.scaleSource } : null);
+
+/* ───────────── Real-world scale & measurements ───────────── */
+const mm = units => units * A.mmPerUnit;
+A.mmToUnits = v => v / A.mmPerUnit;
+A.pxPerMm = function () {
+  const h = renderer.domElement.height / renderer.getPixelRatio(), d = camera.position.distanceTo(controls.target);
+  return (h / 2) / (d * Math.tan(camera.fov * Math.PI / 360)) / A.mmPerUnit;
+};
+function vertexPos(ref, which) {
+  const p = parts()[ref.part]; if (!p) return null;
+  const arr = which === 'before' ? p.base : p.geo.attributes.position.array, k = ref.vi * 3;
+  return new THREE.Vector3(arr[k], arr[k + 1], arr[k + 2]);
+}
+A.measureValues = function (i) {
+  const m = A.measures[i]; if (!m) return null;
+  const a0 = vertexPos(m.a, 'before'), b0 = vertexPos(m.b, 'before'), a1 = vertexPos(m.a, 'after'), b1 = vertexPos(m.b, 'after');
+  if (!a0 || !b0) return null;
+  return { before: mm(a0.distanceTo(b0)), after: mm(a1.distanceTo(b1)), units: a0.distanceTo(b0) };
+};
+function clearMeasures() { A.measures = []; A.pendingPoint = null; rebuildMeasureObjects(); }
+A.deleteMeasure = i => { A.measures.splice(i, 1); rebuildMeasureObjects(); A.onMeasure(); A.onDirty(); };
+A.clearMeasures = () => { clearMeasures(); A.onMeasure(); A.onDirty(); };
+/* Calibrate the scale: measurement i spans `realMm` millimetres on the original model. */
+A.calibrate = function (i, realMm) {
+  const v = A.measureValues(i); if (!v || !(realMm > 0) || v.units <= 0) return false;
+  A.mmPerUnit = realMm / v.units; A.scaleSource = 'calibrated';
+  A.onModel(); A.onMeasure(); A.onDirty(); return true;
+};
+A.setMmPerUnit = function (value, source = 'calibrated') { if (value > 0) { A.mmPerUnit = value; A.scaleSource = source; A.onModel(); A.onMeasure(); A.onDirty(); } };
+function labelTexture(text) {
+  const c = document.createElement('canvas'), g = c.getContext('2d'), font = '600 26px system-ui, sans-serif';
+  g.font = font; const w = Math.ceil(g.measureText(text).width) + 28; c.width = w; c.height = 44;
+  g.font = font; g.fillStyle = 'rgba(22,33,46,.85)'; g.beginPath(); g.roundRect(0, 0, w, 44, 10); g.fill();
+  g.fillStyle = '#fff'; g.textBaseline = 'middle'; g.fillText(text, 14, 23);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return { t, w };
+}
+function rebuildMeasureObjects() {
+  while (measureGroup.children.length) { const o = measureGroup.children.pop(); if (o.material) { if (o.material.map && o.material.map.dispose) o.material.map.dispose(); o.material.dispose(); } if (o.geometry) o.geometry.dispose(); }
+  A.measures.forEach(() => {
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: 0xffb300, depthTest: false }));
+    line.renderOrder = 15; measureGroup.add(line);
+    const ends = new THREE.Points(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.PointsMaterial({ color: 0xffb300, size: 0.05, depthTest: false }));
+    ends.renderOrder = 15; measureGroup.add(ends);
+    const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture(' ').t, depthTest: false, transparent: true }));
+    label.renderOrder = 21; label.userData.text = ''; measureGroup.add(label);
+  });
+  if (A.pendingPoint) {
+    const pt = new THREE.Points(new THREE.BufferGeometry().setFromPoints([vertexPos(A.pendingPoint, 'after')]), new THREE.PointsMaterial({ color: 0xffb300, size: 0.06, depthTest: false }));
+    pt.renderOrder = 15; measureGroup.add(pt);
+  }
+}
+function updateMeasures() {
+  A.measures.forEach((m, i) => {
+    const line = measureGroup.children[i * 3], ends = measureGroup.children[i * 3 + 1], label = measureGroup.children[i * 3 + 2];
+    const a = vertexPos(m.a, 'after'), b = vertexPos(m.b, 'after'); if (!a || !b || !line) return;
+    line.geometry.setFromPoints([a, b]); ends.geometry.setFromPoints([a, b]);
+    const v = A.measureValues(i), text = Math.abs(v.after - v.before) < 0.05 ? `${v.after.toFixed(1)} mm` : `${v.after.toFixed(1)} mm (was ${v.before.toFixed(1)})`;
+    if (label.userData.text !== text) {
+      label.material.map.dispose(); const { t, w } = labelTexture(text); label.material.map = t; label.material.needsUpdate = true;
+      label.scale.set(0.0032 * w, 0.0032 * 44, 1); label.userData.text = text;
+    }
+    label.position.copy(a).lerp(b, 0.5).add(new THREE.Vector3(0, 0.09, 0));
+  });
+}
+function addMeasurePoint(part, vi) {
+  if (!A.pendingPoint) { A.pendingPoint = { part, vi }; rebuildMeasureObjects(); A.onMeasure(); return; }
+  if (A.pendingPoint.part === part && A.pendingPoint.vi === vi) return;
+  A.measures.push({ a: A.pendingPoint, b: { part, vi }, label: '' });
+  A.pendingPoint = null; rebuildMeasureObjects(); A.onMeasure(true); A.onDirty();
+}
+
 /* ───────────── Rendering ───────────── */
 function updatePins() {
-  const n = geo.attributes.normal.array;
-  A.pins.forEach((p, i) => {
-    const s = pinSprites[i]; if (!s) return;
-    const k = p.vi * 3;
-    s.position.set(disp[k] + n[k] * 0.05, disp[k + 1] + n[k + 1] * 0.05, disp[k + 2] + n[k + 2] * 0.05);
+  A.pins.forEach((pin, i) => {
+    const s = pinSprites[i], p = parts()[pin.part]; if (!s || !p) return;
+    const pos = p.geo.attributes.position.array, n = p.geo.attributes.normal.array, k = pin.vi * 3;
+    s.position.set(pos[k] + n[k] * 0.05, pos[k + 1] + n[k + 1] * 0.05, pos[k + 2] + n[k + 2] * 0.05);
   });
 }
 function frame() {
   controls.autoRotate = A.autoRotate;
   controls.update();
-  updatePins();
+  updatePins(); updateMeasures();
+  measureGroup.visible = !A.showBefore;
   const w = renderer.domElement.width / renderer.getPixelRatio(), h = renderer.domElement.height / renderer.getPixelRatio();
   const showAfter = !A.showBefore;
   if (A.compare === 'side' && !A.showBefore) {
     renderer.setScissorTest(true);
     camera.aspect = (w / 2) / h; camera.updateProjectionMatrix();
-    beforeMesh.visible = true; afterMesh.visible = false; pinGroup.visible = false; ring.visible = false;
+    beforeGroup.visible = true; afterGroup.visible = false; pinGroup.visible = false; measureGroup.visible = false; ring.visible = false;
     renderer.setViewport(0, 0, w / 2, h); renderer.setScissor(0, 0, w / 2, h); renderer.render(scene, camera);
-    beforeMesh.visible = false; afterMesh.visible = true; pinGroup.visible = true; ring.visible = !!hoverHit && isSculpt();
+    beforeGroup.visible = false; afterGroup.visible = true; pinGroup.visible = true; measureGroup.visible = !A.showBefore; ring.visible = !!hoverHit && isSculpt();
     renderer.setViewport(w / 2, 0, w / 2, h); renderer.setScissor(w / 2, 0, w / 2, h); renderer.render(scene, camera);
     renderer.setScissorTest(false);
   } else {
     camera.aspect = w / h; camera.updateProjectionMatrix();
-    beforeMesh.visible = !showAfter; afterMesh.visible = showAfter; pinGroup.visible = showAfter;
+    beforeGroup.visible = !showAfter; afterGroup.visible = showAfter; pinGroup.visible = showAfter;
     ring.visible = showAfter && !!hoverHit && isSculpt() && !stroke;
     renderer.setViewport(0, 0, w, h); renderer.render(scene, camera);
+    if (A.compare === 'ghost' && showAfter) {
+      // Translucent overlay of the original shape over the simulated result.
+      const savedOverride = scene.overrideMaterial, savedClear = renderer.autoClear;
+      afterGroup.visible = false; beforeGroup.visible = true; pinGroup.visible = false; measureGroup.visible = false; ring.visible = false;
+      scene.overrideMaterial = ghostMaterial; renderer.autoClear = false;
+      renderer.render(scene, camera);
+      scene.overrideMaterial = savedOverride; renderer.autoClear = savedClear;
+    }
   }
-  afterMesh.visible = true; beforeMesh.visible = true;
+  afterGroup.visible = true; beforeGroup.visible = true;
 }
 const isSculpt = () => ['grab', 'add', 'sub', 'smooth', 'restore'].includes(A.tool);
+const isPointTool = () => A.tool === 'note' || A.tool === 'measure';
 
 /* ───────────── Camera / view ───────────── */
 A.setView = function (preset) {
@@ -200,7 +387,7 @@ A.setView = function (preset) {
   camera.position.set(controls.target.x + d * Math.sin(az), controls.target.y + d * 0.06, controls.target.z + d * Math.cos(az));
   controls.update();
 };
-A.resetView = function () { controls.target.set(0, -0.15, 0); camera.position.set(0, -0.1, 4.8); controls.update(); };
+A.resetView = function () { controls.target.set(0, isGeneric() ? -0.15 : 0, 0); camera.position.set(0, controls.target.y + 0.05, 4.8); controls.update(); };
 A.zoomBy = function (f) {
   const dir = camera.position.clone().sub(controls.target);
   const d = clamp(dir.length() / f, controls.minDistance, controls.maxDistance);
@@ -209,26 +396,28 @@ A.zoomBy = function (f) {
 A.setAutoRotate = on => { A.autoRotate = !!on; };
 A.setCompare = m => { A.compare = m; };
 A.setShowBefore = on => { A.showBefore = !!on; };
-
 A.setTool = function (t) {
   A.tool = t;
   const orbit = t === 'orbit';
   controls.mouseButtons = { LEFT: orbit ? THREE.MOUSE.ROTATE : null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: orbit ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE };
   controls.touches = { ONE: orbit ? THREE.TOUCH.ROTATE : null, TWO: THREE.TOUCH.DOLLY_ROTATE };
-  if (renderer) renderer.domElement.style.cursor = orbit ? 'grab' : t === 'note' ? 'crosshair' : 'none';
+  if (renderer) renderer.domElement.style.cursor = orbit ? 'grab' : isPointTool() ? 'crosshair' : 'none';
+  if (t !== 'measure' && A.pendingPoint) { A.pendingPoint = null; rebuildMeasureObjects(); A.onMeasure(); }
   if (!isSculpt()) ring.visible = false;
 };
 
 /* ───────────── Morph amount ───────────── */
+function commitPart(p) { p.geo.attributes.position.needsUpdate = true; p.geo.computeVertexNormals(); }
 A.setMorph = function (t) {
   A.morph = t;
-  if (t >= 1) disp.set(cur);
-  else for (let i = 0; i < disp.length; i++) disp[i] = base[i] + (cur[i] - base[i]) * t;
-  geo.attributes.position.needsUpdate = true;
-  geo.computeVertexNormals();
+  for (const p of parts()) {
+    const disp = p.geo.attributes.position.array;
+    if (t >= 1) disp.set(p.cur); else for (let i = 0; i < disp.length; i++) disp[i] = p.base[i] + (p.cur[i] - p.base[i]) * t;
+    commitPart(p);
+  }
 };
-function commit() { A.morph = 1; disp.set(cur); geo.attributes.position.needsUpdate = true; geo.computeVertexNormals(); }
-A.hasEdits = function () { for (let i = 0; i < cur.length; i++) if (cur[i] !== base[i]) return true; return false; };
+function commit() { A.morph = 1; for (const p of parts()) { p.geo.attributes.position.array.set(p.cur); commitPart(p); } }
+A.hasEdits = function () { for (const p of parts()) for (let i = 0; i < p.cur.length; i++) if (p.cur[i] !== p.base[i]) return true; return false; };
 
 /* ───────────── Picking ───────────── */
 function ndcFromEvent(e) {
@@ -240,69 +429,80 @@ function ndcFromEvent(e) {
 function raycastNdc(ndc) {
   if (!ndc) return null;
   raycaster.setFromCamera(ndc, camera);
-  const hits = raycaster.intersectObject(afterMesh, false);
-  return hits.length ? hits[0] : null;
+  const hits = raycaster.intersectObjects(parts().map(p => p.mesh), false);
+  if (!hits.length) return null;
+  const hit = hits[0]; hit.partIndex = parts().findIndex(p => p.mesh === hit.object);
+  return hit;
 }
 function closestVertex(hit) {
-  const f = hit.face, p = hit.point; let best = f.a, bd = Infinity;
+  const p = parts()[hit.partIndex], pos = p.geo.attributes.position.array, f = hit.face, q = hit.point; let best = f.a, bd = Infinity;
   for (const vi of [f.a, f.b, f.c]) {
-    const d = (disp[vi * 3] - p.x) ** 2 + (disp[vi * 3 + 1] - p.y) ** 2 + (disp[vi * 3 + 2] - p.z) ** 2;
+    const d = (pos[vi * 3] - q.x) ** 2 + (pos[vi * 3 + 1] - q.y) ** 2 + (pos[vi * 3 + 2] - q.z) ** 2;
     if (d < bd) { bd = d; best = vi; }
   }
   return best;
 }
 function placeRing(hit) {
   ring.position.copy(hit.point);
-  const n = hit.face.normal.clone();
-  ring.lookAt(hit.point.clone().add(n));
+  ring.lookAt(hit.point.clone().add(hit.face.normal));
   ring.scale.setScalar(A.brush);
 }
 
 /* ───────────── Sculpting ───────────── */
-function affected(center, sign) {
-  const idx = [], f = [], r = A.brush, r2 = r * r, cx = center.x * sign, cy = center.y, cz = center.z;
-  for (let i = 0; i < NV; i++) {
+function affected(p, center, sign) {
+  const idx = [], f = [], r = A.brush, r2 = r * r, cx = center.x * sign, cy = center.y, cz = center.z, cur = p.cur;
+  for (let i = 0; i < p.n; i++) {
     const dx = cur[i * 3] - cx, dy = cur[i * 3 + 1] - cy, dz = cur[i * 3 + 2] - cz, d2 = dx * dx + dy * dy + dz * dz;
     if (d2 >= r2) continue;
     const q = 1 - d2 / r2; idx.push(i); f.push(q * q);
   }
   return { idx, f, sign };
 }
-function groupsFor(point) {
-  const g = [affected(point, 1)];
-  if (A.symmetry && Math.abs(point.x) > 0.012) g.push(affected(point, -1));
+function groupsFor(p, point) {
+  const g = [affected(p, point, 1)];
+  if (A.symmetry && Math.abs(point.x) > 0.012) g.push(affected(p, point, -1));
   return g;
 }
+/* Remember a vertex's pre-stroke position the first time a stroke touches it (for undo). */
+function touch(p, i) {
+  const t = stroke.touched[p.id] || (stroke.touched[p.id] = { part: p.id, seen: new Uint8Array(p.n), idx: [], old: [] });
+  if (t.seen[i]) return;
+  t.seen[i] = 1; t.idx.push(i); t.old.push(p.cur[i * 3], p.cur[i * 3 + 1], p.cur[i * 3 + 2]);
+}
 function applyContinuous(point) {
-  const k = A.strength, n = geo.attributes.normal.array, tool = A.tool;
-  for (const g of groupsFor(point)) {
-    for (let m = 0; m < g.idx.length; m++) {
-      const i = g.idx[m], f = g.f[m], o = i * 3;
-      if (tool === 'add' || tool === 'sub') {
-        const s = (tool === 'add' ? 1 : -1) * f * k * 0.004;
-        cur[o] += n[o] * s; cur[o + 1] += n[o + 1] * s; cur[o + 2] += n[o + 2] * s;
-      } else if (tool === 'smooth') {
-        const col = i % COLS, row = (i - col) / COLS;
-        const l = col > 0 ? i - 1 : i, r = col < SEG_U ? i + 1 : i, u = row > 0 ? i - COLS : i, d = row < SEG_V ? i + COLS : i;
-        const a = f * k * 0.25;
-        for (let c = 0; c < 3; c++) {
-          const avg = (cur[l * 3 + c] + cur[r * 3 + c] + cur[u * 3 + c] + cur[d * 3 + c]) / 4;
-          cur[o + c] += (avg - cur[o + c]) * a;
+  const k = A.strength, tool = A.tool;
+  parts().forEach((p, pi) => {
+    p.id = pi;
+    const cur = p.cur, n = p.geo.attributes.normal.array, adj = p.adj;
+    for (const g of groupsFor(p, point)) {
+      for (let m = 0; m < g.idx.length; m++) {
+        const i = g.idx[m], f = g.f[m], o = i * 3;
+        touch(p, i);
+        if (tool === 'add' || tool === 'sub') {
+          const s = (tool === 'add' ? 1 : -1) * f * k * 0.004;
+          cur[o] += n[o] * s; cur[o + 1] += n[o + 1] * s; cur[o + 2] += n[o + 2] * s;
+        } else if (tool === 'smooth') {
+          const a0 = adj.start[i], a1 = adj.start[i + 1]; if (a1 === a0) continue;
+          let ax = 0, ay = 0, az = 0;
+          for (let a = a0; a < a1; a++) { const j = adj.list[a] * 3; ax += cur[j]; ay += cur[j + 1]; az += cur[j + 2]; }
+          const inv = 1 / (a1 - a0), w = f * k * 0.25;
+          cur[o] += (ax * inv - cur[o]) * w; cur[o + 1] += (ay * inv - cur[o + 1]) * w; cur[o + 2] += (az * inv - cur[o + 2]) * w;
+        } else if (tool === 'restore') {
+          const w = f * k * 0.12;
+          for (let c = 0; c < 3; c++) cur[o + c] += (p.base[o + c] - cur[o + c]) * w;
         }
-      } else if (tool === 'restore') {
-        const a = f * k * 0.12;
-        for (let c = 0; c < 3; c++) cur[o + c] += (base[o + c] - cur[o + c]) * a;
       }
     }
-  }
+  });
   commit();
 }
 function applyGrab(delta) {
-  const k = A.strength, s = stroke.before;
-  for (const g of stroke.groups) {
+  const k = A.strength;
+  for (const g of stroke.grab) {
+    const p = parts()[g.part], cur = p.cur, s = g.start;
     for (let m = 0; m < g.idx.length; m++) {
-      const i = g.idx[m], f = g.f[m] * k, o = i * 3;
-      cur[o] = s[o] + delta.x * g.sign * f; cur[o + 1] = s[o + 1] + delta.y * f; cur[o + 2] = s[o + 2] + delta.z * f;
+      const i = g.idx[m], f = g.f[m] * k, o = i * 3, so = m * 3;
+      cur[o] = s[so] + delta.x * g.sign * f; cur[o + 1] = s[so + 1] + delta.y * f; cur[o + 2] = s[so + 2] + delta.z * f;
     }
   }
   commit();
@@ -312,18 +512,26 @@ function onDown(e) {
   if (pointerIds.size > 1) { endStroke(); return; }
   if (e.button !== 0) return;
   const ndc = ndcFromEvent(e); if (!ndc) return;
-  // Pins can be selected with any tool.
   raycaster.setFromCamera(ndc, camera);
   const ph = raycaster.intersectObjects(pinSprites, false);
   if (ph.length) { A.selectPin(pinSprites.indexOf(ph[0].object)); return; }
   if (A.tool === 'orbit' || A.showBefore) return;
   const hit = raycastNdc(ndc); if (!hit) return;
-  if (A.tool === 'note') { e.preventDefault(); addPin(closestVertex(hit)); return; }
+  if (A.tool === 'note') { e.preventDefault(); addPin(hit.partIndex, closestVertex(hit)); return; }
+  if (A.tool === 'measure') { e.preventDefault(); addMeasurePoint(hit.partIndex, closestVertex(hit)); return; }
   renderer.domElement.setPointerCapture(e.pointerId);
   if (A.morph < 1) A.setMorph(1);
-  stroke = { ndc, before: cur.slice(), raf: 0 };
+  stroke = { ndc, touched: {}, raf: 0 };
   if (A.tool === 'grab') {
-    stroke.groups = groupsFor(hit.point);
+    stroke.grab = [];
+    parts().forEach((p, pi) => {
+      p.id = pi;
+      for (const g of groupsFor(p, hit.point)) {
+        const start = new Float32Array(g.idx.length * 3);
+        g.idx.forEach((i, m) => { touch(p, i); start[m * 3] = p.cur[i * 3]; start[m * 3 + 1] = p.cur[i * 3 + 1]; start[m * 3 + 2] = p.cur[i * 3 + 2]; });
+        stroke.grab.push({ part: pi, idx: g.idx, f: g.f, sign: g.sign, start });
+      }
+    });
     stroke.plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), hit.point);
     stroke.origin = hit.point.clone();
   } else {
@@ -341,34 +549,44 @@ function onMove(e) {
   const ndc = ndcFromEvent(e);
   if (stroke) {
     stroke.ndc = ndc;
-    if (stroke.groups && ndc) {
+    if (stroke.grab && ndc) {
       raycaster.setFromCamera(ndc, camera);
       const p = new THREE.Vector3();
       if (raycaster.ray.intersectPlane(stroke.plane, p)) applyGrab(p.sub(stroke.origin));
     }
     return;
   }
-  if (isSculpt() || A.tool === 'note') {
-    const hit = raycastNdc(ndc);
-    hoverHit = hit;
-    if (hit) placeRing(hit);
-  }
+  if (isSculpt() || isPointTool()) { const hit = raycastNdc(ndc); hoverHit = hit; if (hit) placeRing(hit); }
 }
 function onUp(e) { pointerIds.delete(e.pointerId); if (stroke) endStroke(); }
 function endStroke() {
   if (!stroke) return;
   cancelAnimationFrame(stroke.raf);
-  let changed = false;
-  for (let i = 0; i < cur.length; i++) if (cur[i] !== stroke.before[i]) { changed = true; break; }
-  if (changed) {
-    A.history.push(stroke.before); if (A.history.length > HISTORY_LIMIT) A.history.shift();
-    A.redo = []; A.onHistory(); A.onDirty();
-  }
+  const entries = Object.values(stroke.touched).map(t => ({ part: t.part, idx: Uint32Array.from(t.idx), old: Float32Array.from(t.old) })).filter(t => t.idx.length);
   stroke = null;
+  if (!entries.length) return;
+  let changed = false;
+  for (const t of entries) { const cur = parts()[t.part].cur; for (let m = 0; m < t.idx.length && !changed; m++) { const o = t.idx[m] * 3; if (cur[o] !== t.old[m * 3] || cur[o + 1] !== t.old[m * 3 + 1] || cur[o + 2] !== t.old[m * 3 + 2]) changed = true; } }
+  if (!changed) return;
+  A.history.push(entries); if (A.history.length > HISTORY_LIMIT) A.history.shift();
+  A.redo = []; A.onHistory(); A.onDirty();
 }
-A.undo = function () { if (!A.history.length) return; A.redo.push(cur.slice()); cur.set(A.history.pop()); commit(); A.onHistory(); A.onDirty(); };
-A.redoStep = function () { if (!A.redo.length) return; A.history.push(cur.slice()); cur.set(A.redo.pop()); commit(); A.onHistory(); A.onDirty(); };
-A.reset = function () { A.history.push(cur.slice()); cur.set(base); A.redo = []; commit(); A.onHistory(); A.onDirty(); };
+function swapEntries(entries) {
+  // Apply the stored positions and return the inverse entry set.
+  return entries.map(t => {
+    const p = parts()[t.part], cur = p.cur, now = new Float32Array(t.old.length);
+    for (let m = 0; m < t.idx.length; m++) { const o = t.idx[m] * 3, so = m * 3; now[so] = cur[o]; now[so + 1] = cur[o + 1]; now[so + 2] = cur[o + 2]; cur[o] = t.old[so]; cur[o + 1] = t.old[so + 1]; cur[o + 2] = t.old[so + 2]; }
+    return { part: t.part, idx: t.idx, old: now };
+  });
+}
+A.undo = function () { if (!A.history.length) return; A.redo.push(swapEntries(A.history.pop())); commit(); A.onHistory(); A.onDirty(); };
+A.redoStep = function () { if (!A.redo.length) return; A.history.push(swapEntries(A.redo.pop())); commit(); A.onHistory(); A.onDirty(); };
+A.reset = function () {
+  const entries = parts().map((p, pi) => { const idx = new Uint32Array(p.n); for (let i = 0; i < p.n; i++) idx[i] = i; return { part: pi, idx, old: p.cur.slice() }; });
+  A.history.push(entries); if (A.history.length > HISTORY_LIMIT) A.history.shift();
+  for (const p of parts()) p.cur.set(p.base);
+  A.redo = []; commit(); A.onHistory(); A.onDirty();
+};
 A.canUndo = () => A.history.length > 0;
 A.canRedo = () => A.redo.length > 0;
 
@@ -389,11 +607,11 @@ function rebuildPinSprites() {
   });
   updatePins();
 }
-function addPin(vi) { A.pins.push({ vi, text: '' }); A.selectedPin = A.pins.length - 1; rebuildPinSprites(); A.onPins(true); A.onDirty(); }
+function addPin(part, vi) { A.pins.push({ part, vi, text: '' }); A.selectedPin = A.pins.length - 1; rebuildPinSprites(); A.onPins(true); A.onDirty(); }
 A.selectPin = i => { A.selectedPin = i; rebuildPinSprites(); A.onPins(false); };
 A.deletePin = i => { A.pins.splice(i, 1); A.selectedPin = -1; rebuildPinSprites(); A.onPins(false); A.onDirty(); };
 
-/* ───────────── Photos & texture bake ───────────── */
+/* ───────────── Photos & texture bake (generic head only) ───────────── */
 A.defaultAlign = function (view) { return { cx: view.W / 2, cy: view.H * 0.47, s: view.H * 0.26, flip: false }; };
 A.setPhoto = function (role, view, align) {
   A.photos[role] = view || null;
@@ -402,7 +620,6 @@ A.setPhoto = function (role, view, align) {
 A.setAlign = function (role, align) { A.align[role] = { ...align }; };
 A.getAlign = role => A.align[role];
 A.rebake = function () { bake(); };
-
 function prepPhoto(role) {
   const v = A.photos[role], a = A.align[role];
   if (!v || !a) return null;
@@ -423,7 +640,7 @@ function estimateSkin(P) {
 function bake() {
   const t0 = performance.now();
   const img = texCanvas.getContext('2d').createImageData(TEX, TEX), d = img.data;
-  const bp = beforeGeo.attributes.position.array, bn = beforeGeo.attributes.normal.array;
+  const bp = genericGeo.attributes.position.array, bn = genericGeo.attributes.normal.array;
   const photos = [prepPhoto('front'), prepPhoto('right'), prepPhoto('left')].filter(Boolean);
   const skin = estimateSkin(prepPhoto('front') || prepPhoto('right') || prepPhoto('left'));
   const col = [0, 0, 0];
@@ -472,12 +689,9 @@ function bake() {
   texture.needsUpdate = true;
   A.onStatus(`Avatar texture built in ${Math.round(performance.now() - t0)} ms`);
 }
-
-/* Outline of the head for the alignment overlay, in head units ([X, Y] pairs). */
 A.silhouette = function (role) {
-  const pts = [];
+  const base = genericGeo.attributes.position.array, pts = [];
   if (role === 'front') {
-    // Every mesh row has a constant height, so the outline is the widest point of each row.
     const rows = [];
     for (let j = 0; j <= SEG_V; j++) {
       let mx = 0;
@@ -498,8 +712,7 @@ A.silhouette = function (role) {
 A.snapshot = function (kind, preset, size = 1000) {
   if (!off) { off = new THREE.WebGLRenderer({ antialias: true, alpha: false }); off.setPixelRatio(1); off.setClearColor(0xffffff, 1); }
   off.setSize(size, size, false);
-  const savedPos = camera.position.clone(), savedQuat = camera.quaternion.clone(), savedAspect = camera.aspect;
-  const savedMorph = A.morph;
+  const savedPos = camera.position.clone(), savedQuat = camera.quaternion.clone(), savedAspect = camera.aspect, savedMorph = A.morph;
   if (preset && preset !== 'current') {
     const az = (PRESETS[preset] ?? 0) * Math.PI / 180, d = 4.8;
     camera.position.set(controls.target.x + d * Math.sin(az), controls.target.y + d * 0.06, controls.target.z + d * Math.cos(az));
@@ -507,10 +720,11 @@ A.snapshot = function (kind, preset, size = 1000) {
   }
   camera.aspect = 1; camera.updateProjectionMatrix();
   if (savedMorph < 1) A.setMorph(1);
-  beforeMesh.visible = kind === 'before'; afterMesh.visible = kind !== 'before'; pinGroup.visible = kind !== 'before'; ring.visible = false;
+  beforeGroup.visible = kind === 'before'; afterGroup.visible = kind !== 'before'; pinGroup.visible = kind !== 'before'; measureGroup.visible = kind !== 'before'; ring.visible = false;
+  updateMeasures();
   off.render(scene, camera);
   const c = document.createElement('canvas'); c.width = c.height = size; c.getContext('2d').drawImage(off.domElement, 0, 0);
-  beforeMesh.visible = afterMesh.visible = true;
+  beforeGroup.visible = afterGroup.visible = measureGroup.visible = true;
   camera.position.copy(savedPos); camera.quaternion.copy(savedQuat); camera.aspect = savedAspect; camera.updateProjectionMatrix();
   if (savedMorph < 1) A.setMorph(savedMorph);
   return c;
@@ -519,38 +733,64 @@ A.snapshot = function (kind, preset, size = 1000) {
 /* ───────────── Save / restore ───────────── */
 function b64FromBytes(bytes) { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); }
 function bytesFromB64(b64) { const s = atob(b64), out = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i); return out; }
-A.serialize = function (viewIndex) {
-  let disp = null;
-  if (A.hasEdits()) {
-    const q = new Int16Array(cur.length);
-    for (let i = 0; i < cur.length; i++) q[i] = clamp(Math.round((cur[i] - base[i]) * DISP_Q), -32768, 32767);
-    disp = { segU: SEG_U, segV: SEG_V, q: DISP_Q, data: b64FromBytes(new Uint8Array(q.buffer)) };
+function encodeParts() {
+  const out = [];
+  parts().forEach((p, pi) => {
+    let any = false; for (let i = 0; i < p.cur.length; i++) if (p.cur[i] !== p.base[i]) { any = true; break; }
+    if (!any) return;
+    const q = new Int16Array(p.cur.length);
+    for (let i = 0; i < p.cur.length; i++) q[i] = clamp(Math.round((p.cur[i] - p.base[i]) * DISP_Q), -32768, 32767);
+    out.push({ part: pi, n: p.n, q: DISP_Q, data: b64FromBytes(new Uint8Array(q.buffer)) });
+  });
+  return out;
+}
+function decodeParts(list) {
+  for (const d of list || []) {
+    const p = parts()[d.part]; if (!p || d.n !== p.n) continue;
+    const q = new Int16Array(bytesFromB64(d.data).buffer);
+    for (let i = 0; i < p.cur.length && i < q.length; i++) p.cur[i] = p.base[i] + q[i] / d.q;
   }
+}
+A.serialize = function (viewIndex) {
   const roles = {};
   for (const r of ['front', 'right', 'left']) roles[r] = A.photos[r] ? { view: viewIndex(A.photos[r]), align: A.align[r] } : null;
-  return { roles, disp, pins: A.pins.map(p => ({ ...p })) };
+  const model = isGeneric() ? null : { name: A.model.name, glb: b64FromBytes(new Uint8Array(A.model.glb)), turns: A.model.turns.slice() };
+  return { version: 2, roles, model, parts: encodeParts(), pins: A.pins.map(p => ({ ...p })), mmPerUnit: A.mmPerUnit, scaleSource: A.scaleSource, measures: A.measures.map(m => ({ a: { ...m.a }, b: { ...m.b }, label: m.label || '' })) };
 };
-A.restore = function (data, viewAt) {
-  A.history = []; A.redo = []; cur.set(base);
-  A.pins = []; A.selectedPin = -1;
+A.restore = async function (data, viewAt) {
   for (const r of ['front', 'right', 'left']) { A.photos[r] = null; A.align[r] = null; }
-  if (data) {
-    for (const r of ['front', 'right', 'left']) {
-      const d = data.roles && data.roles[r], v = d ? viewAt(d.view) : null;
-      if (v) { A.photos[r] = v; A.align[r] = d.align && typeof d.align.s === 'number' ? { ...d.align } : A.defaultAlign(v); }
-    }
-    if (data.disp && data.disp.segU === SEG_U && data.disp.segV === SEG_V) {
-      const q = new Int16Array(bytesFromB64(data.disp.data).buffer);
-      for (let i = 0; i < cur.length && i < q.length; i++) cur[i] = base[i] + q[i] / data.disp.q;
-    }
-    A.pins = (data.pins || []).filter(p => Number.isInteger(p.vi) && p.vi >= 0 && p.vi < NV).map(p => ({ vi: p.vi, text: String(p.text || '') }));
+  if (data && data.roles) for (const r of ['front', 'right', 'left']) {
+    const d = data.roles[r], v = d ? viewAt(d.view) : null;
+    if (v) { A.photos[r] = v; A.align[r] = d.align && typeof d.align.s === 'number' ? { ...d.align } : A.defaultAlign(v); }
   }
-  commit(); rebuildPinSprites(); bake(); A.onHistory(); A.onPins(false);
+  let loaded = false;
+  if (data && data.model && data.model.glb) {
+    try {
+      await A.loadGLB(bytesFromB64(data.model.glb).buffer, data.model.name || 'model.glb'); loaded = true;
+      for (const t of data.model.turns || []) { applyTurn(t.axis, t.q); A.model.turns.push({ axis: t.axis, q: t.q }); }
+    }
+    catch (e) { A.onStatus('The saved 3D model could not be loaded: ' + e.message); }
+  }
+  if (!loaded) useGenericModel();
+  A.history = []; A.redo = [];
+  if (data) {
+    if (data.version === 2) decodeParts(data.parts);
+    else if (data.disp && isGeneric() && data.disp.segU === SEG_U && data.disp.segV === SEG_V) decodeParts([{ part: 0, n: NV, q: data.disp.q, data: data.disp.data }]);
+    const np = parts();
+    A.pins = (data.pins || []).map(p => ({ part: Number.isInteger(p.part) ? p.part : 0, vi: p.vi, text: String(p.text || '') }))
+      .filter(p => np[p.part] && Number.isInteger(p.vi) && p.vi >= 0 && p.vi < np[p.part].n);
+    const okRef = r => r && np[r.part] && Number.isInteger(r.vi) && r.vi >= 0 && r.vi < np[r.part].n;
+    A.measures = (data.measures || []).filter(m => okRef(m.a) && okRef(m.b)).map(m => ({ a: { ...m.a }, b: { ...m.b }, label: String(m.label || '') }));
+    if (data.mmPerUnit > 0) { A.mmPerUnit = data.mmPerUnit; A.scaleSource = data.scaleSource || 'calibrated'; }
+  }
+  A.selectedPin = -1; A.pendingPoint = null;
+  commit(); rebuildPinSprites(); rebuildMeasureObjects();
+  A.onModel(); A.onHistory(); A.onPins(false); A.onMeasure();
 };
 A.dropView = function (view) {
   let changed = false;
   for (const r of ['front', 'right', 'left']) if (A.photos[r] === view) { A.photos[r] = null; A.align[r] = null; changed = true; }
-  if (changed) bake();
+  if (changed && isGeneric()) bake();
 };
 
 window.Avatar3D = A;

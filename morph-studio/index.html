@@ -76,6 +76,9 @@
       <button data-tool="note" title="Click on the head to add a numbered note">
         <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.4-7-11a7 7 0 0 1 14 0c0 4.6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>Note<kbd>A</kbd>
       </button>
+      <button data-tool="measure" title="Click two points on the head to measure the distance in mm (updates as you sculpt)">
+        <svg viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21zM8 12l2 2M11 9l2 2M14 6l2 2"/></svg>Measure<kbd>D</kbd>
+      </button>
     </div>
     <label class="check only-3d"><input type="checkbox" id="symmetry" checked> Mirror left / right (symmetry)</label>
 
@@ -84,8 +87,8 @@
       <input type="range" id="brush" min="8" max="200" value="60">
     </div>
     <div class="only-3d">
-      <label for="brush3d">Brush size <output id="brush3dVal">18</output></label>
-      <input type="range" id="brush3d" min="5" max="50" value="18">
+      <label for="brush3d">Brush size <output id="brush3dVal">21 mm</output></label>
+      <input type="range" id="brush3d" min="3" max="60" value="18">
     </div>
     <label for="strength">Strength <output id="strengthVal">50</output>%</label>
     <input type="range" id="strength" min="5" max="100" value="50">
@@ -119,6 +122,7 @@
       <canvas id="canvas"></canvas>
       <div class="divider" id="divider" hidden><span class="knob" title="Drag to compare">◀ ▶</span></div>
       <div class="hint3d only-3d" id="hint3d" hidden></div>
+      <div class="scalebar only-3d" id="scalebar" hidden><div class="bar"></div><span>20 mm</span></div>
       <div class="empty only-2d" id="empty">
         <div class="card">
           <h2>Add the patient's photos</h2>
@@ -143,6 +147,7 @@
       <div class="seg only-3d" id="compare3dSeg">
         <button data-compare="after" class="active">After only</button>
         <button data-compare="side">Side by side</button>
+        <button data-compare="ghost" title="Original shape drawn as a translucent overlay on the simulated result">Ghost overlay</button>
       </div>
       <span class="bar-label only-3d">View</span>
       <div class="seg only-3d" id="viewSeg">
@@ -177,6 +182,33 @@
     </div>
 
     <div class="only-3d">
+      <h3>3D model of the patient</h3>
+      <div class="model-box">
+        <div id="modelStatus" class="model-status">Generic head</div>
+        <div class="row">
+          <button id="btnLoadModel" class="primary">Load 3D model…</button>
+          <button id="btnRemoveModel" hidden>Remove</button>
+        </div>
+        <div class="row turn" id="turnRow" hidden>
+          <span class="bar-label">Orientation</span>
+          <button data-turn="y:1" title="Turn left 90°">⟲</button>
+          <button data-turn="y:-1" title="Turn right 90°">⟳</button>
+          <button data-turn="x:2" title="Flip upside down">⇅</button>
+          <button data-turn="z:1" title="Roll 90°">↻</button>
+        </div>
+        <p class="hint">For a realistic, to-scale avatar, create a 3D model of the patient from the front photo with an image-to-3D service (for example Tripo, Meshy or Hunyuan3D) or a phone scanning app, download it as <strong>.glb</strong> and load it here. Without a model, the photos are projected onto a generic head.</p>
+      </div>
+
+      <h3>Scale &amp; measurements</h3>
+      <div class="model-box">
+        <div id="scaleStatus" class="model-status"></div>
+        <p class="hint">Use the <strong>Measure</strong> tool: click two points whose real distance you know (pupil to pupil is usually 60–65 mm), then <strong>Set as…</strong> on that measurement to calibrate. Measurements update live while you sculpt and show the change.</p>
+        <div class="measure-list" id="measureList"></div>
+        <button id="btnClearMeasures" class="wide" hidden>Clear measurements</button>
+      </div>
+    </div>
+
+    <div class="only-3d" id="photoRoles">
       <h3>Avatar photos</h3>
       <p class="hint">The photos are projected onto a generic head. Use <strong>Align</strong> so the eyes and chin match. Areas without a photo are shown in a neutral skin tone.</p>
       <div class="role"><label for="role-front">Front</label><div class="row"><select id="role-front" data-role="front"></select><button data-align="front">Align…</button></div></div>
@@ -210,6 +242,7 @@
 
 <input type="file" id="filePhotos" accept="image/*" multiple hidden>
 <input type="file" id="fileCase" accept=".json,application/json" hidden>
+<input type="file" id="fileModel" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden>
 <input type="file" id="fileDocs" multiple accept=".pdf,.doc,.docx,.odt,.rtf,.txt,.md,image/*,application/pdf,text/plain" hidden>
 <div class="modal" id="docModal" hidden>
   <div class="modal-card doc-card">
