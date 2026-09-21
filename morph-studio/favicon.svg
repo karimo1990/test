@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="TaskHive">
+  <defs>
+    <linearGradient id="fg" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#FDC81A"/>
+      <stop offset="0.5" stop-color="#FDB400"/>
+      <stop offset="1" stop-color="#F59300"/>
+    </linearGradient>
+  </defs>
+  <rect width="120" height="120" rx="26" fill="#02152C"/>
+  <g transform="translate(38 10) scale(0.44)" fill="url(#fg)" stroke="url(#fg)" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M44 5.5 L83 27.5 L83 45 L44 23 L5 45 L5 27.5 Z"/>
+    <path d="M44 33 L83 55 L83 71.5 L44 50 L5 71.5 L5 55 Z"/>
+    <path d="M44 61 L72.5 79.5 L44 98 L15.5 79.5 Z"/>
+  </g>
+</svg>

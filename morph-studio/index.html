@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Morph Studio — before &amp; after simulation</title>
+  <meta name="description" content="Simple in-browser before/after photo morphing for facial surgery consultations. Upload patient photos, sculpt the planned change, compare and annotate.">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script type="importmap">{"imports":{"three":"./vendor/three/three.module.min.js"}}</script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Morph Studio <span>before / after consultation aid</span></div>
+  <div class="seg mode" id="modeSeg" role="tablist">
+    <button data-mode="2d" class="active" title="Sculpt directly on the patient's photos">Photo morph</button>
+    <button data-mode="3d" title="A rotatable 3D head built from the photos">3D avatar</button>
+  </div>
+  <div class="status" id="status">Runs entirely on this device — photos are never uploaded.</div>
+  <div class="topbar-actions">
+    <button id="btnAI" title="Connect the Claude AI (and optionally the 3D generator)">AI settings</button>
+    <button id="btnNew" title="Start a new, empty case">New case</button>
+    <button id="btnOpen" title="Open a saved case file (.json)">Open…</button>
+    <button id="btnSave" title="Download this case as a file you can reopen later">Save case</button>
+    <button id="btnExport" title="Download a labelled before / after image of the current photo">Export image</button>
+    <button id="btnPrint" class="primary" title="Print or save a consultation summary as PDF">Print summary</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ───────── Tools ───────── -->
+  <aside class="panel tools">
+    <h3>Tools</h3>
+    <div class="tool-grid only-2d" id="toolGrid">
+      <button data-tool="push" class="active" title="Drag to move tissue in the direction you pull">
+        <svg viewBox="0 0 24 24"><path d="M4 12h13M13 6l6 6-6 6"/></svg>Push<kbd>P</kbd>
+      </button>
+      <button data-tool="shrink" title="Hold to pull tissue inwards (reduce)">
+        <svg viewBox="0 0 24 24"><path d="M4 4l6 6M10 5v5H5M20 20l-6-6M14 19v-5h5M20 4l-6 6M14 5v5h5M4 20l6-6M10 19v-5H5"/></svg>Reduce<kbd>S</kbd>
+      </button>
+      <button data-tool="expand" title="Hold to push tissue outwards (augment)">
+        <svg viewBox="0 0 24 24"><path d="M10 10L4 4M4 9V4h5M14 14l6 6M20 15v5h-5M14 10l6-6M20 9V4h-5M10 14l-6 6M4 15v5h5"/></svg>Augment<kbd>E</kbd>
+      </button>
+      <button data-tool="restore" title="Hold to gradually return the area to the original photo">
+        <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>Restore<kbd>R</kbd>
+      </button>
+      <button data-tool="annotate" title="Click on the photo to add a numbered note">
+        <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.4-7-11a7 7 0 0 1 14 0c0 4.6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>Note<kbd>A</kbd>
+      </button>
+      <button data-tool="landmarks" title="Landmarks are found automatically; drag one only if it is off">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="6" r="2"/><circle cx="7" cy="14" r="2"/><circle cx="17" cy="14" r="2"/><circle cx="12" cy="19" r="2"/><path d="M12 8v9M8.7 13l2.3-5M15.3 13L13 8"/></svg>Landmarks<kbd>L</kbd>
+      </button>
+      <button data-tool="hand" title="Drag to move around the photo">
+        <svg viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 5a1.5 1.5 0 0 1 3 0v7M14 6.5a1.5 1.5 0 0 1 3 0V13M17 9.5a1.5 1.5 0 0 1 3 0V15c0 4-3 6-6.5 6S7 19 6 16L4.5 11.5a1.5 1.5 0 0 1 2.8-1L8 13"/></svg>Move<kbd>H</kbd>
+      </button>
+    </div>
+
+    <div class="tool-grid only-3d" id="toolGrid3d">
+      <button data-tool="orbit" class="active" title="Drag to rotate the head, wheel to zoom, right-drag to move">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M4 12c0 2 3.6 3.5 8 3.5s8-1.5 8-3.5M12 4v16"/><path d="M15 3.5l3 1-1 3"/></svg>Rotate<kbd>H</kbd>
+      </button>
+      <button data-tool="grab" title="Drag to pull the surface in the direction you move">
+        <svg viewBox="0 0 24 24"><path d="M4 12h13M13 6l6 6-6 6"/></svg>Grab<kbd>P</kbd>
+      </button>
+      <button data-tool="sub" title="Hold to lower the surface (reduce)">
+        <svg viewBox="0 0 24 24"><path d="M4 4l6 6M10 5v5H5M20 20l-6-6M14 19v-5h5M20 4l-6 6M14 5v5h5M4 20l6-6M10 19v-5H5"/></svg>Reduce<kbd>S</kbd>
+      </button>
+      <button data-tool="add" title="Hold to raise the surface (augment)">
+        <svg viewBox="0 0 24 24"><path d="M10 10L4 4M4 9V4h5M14 14l6 6M20 15v5h-5M14 10l6-6M20 9V4h-5M10 14l-6 6M4 15v5h5"/></svg>Augment<kbd>E</kbd>
+      </button>
+      <button data-tool="smooth" title="Hold to smooth the surface">
+        <svg viewBox="0 0 24 24"><path d="M3 15c3-6 6-6 9 0s6 6 9 0"/></svg>Smooth<kbd>M</kbd>
+      </button>
+      <button data-tool="restore" title="Hold to gradually return the area to the original shape">
+        <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>Restore<kbd>R</kbd>
+      </button>
+      <button data-tool="note" title="Click on the head to add a numbered note">
+        <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.4-7-11a7 7 0 0 1 14 0c0 4.6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>Note<kbd>A</kbd>
+      </button>
+      <button data-tool="landmark" title="Landmarks are found automatically; use this only to nudge one by hand">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="6" r="2"/><circle cx="7" cy="14" r="2"/><circle cx="17" cy="14" r="2"/><circle cx="12" cy="19" r="2"/><path d="M12 8v9M8.7 13l2.3-5M15.3 13L13 8"/></svg>Landmarks<kbd>L</kbd>
+      </button>
+      <button data-tool="measure" title="Click two points on the head to measure the distance in mm (updates as you sculpt)">
+        <svg viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21zM8 12l2 2M11 9l2 2M14 6l2 2"/></svg>Measure<kbd>D</kbd>
+      </button>
+    </div>
+    <label class="check only-3d"><input type="checkbox" id="symmetry" checked> Mirror left / right (symmetry)</label>
+
+    <div class="only-2d">
+      <label for="brush">Brush size <output id="brushVal">60</output> px</label>
+      <input type="range" id="brush" min="8" max="200" value="60">
+    </div>
+    <div class="only-3d">
+      <label for="brush3d">Brush size <output id="brush3dVal">21 mm</output></label>
+      <input type="range" id="brush3d" min="3" max="60" value="18">
+    </div>
+    <label for="strength">Strength <output id="strengthVal">50</output>%</label>
+    <input type="range" id="strength" min="5" max="100" value="50">
+    <p class="hint only-2d">Tip: small brush + low strength gives the most natural result. Hold <kbd>Space</kbd> to peek at the original.</p>
+    <p class="hint only-3d">Rotate with the right mouse button or two fingers while sculpting. Hold <kbd>Space</kbd> to peek at the original.</p>
+
+    <h3>History</h3>
+    <div class="row">
+      <button id="btnUndo" disabled title="Undo (Ctrl+Z)">Undo</button>
+      <button id="btnRedo" disabled title="Redo (Ctrl+Shift+Z)">Redo</button>
+    </div>
+    <button id="btnReset" class="wide" title="Remove every edit on this photo">Reset this photo</button>
+
+    <h3>Reveal</h3>
+    <label for="morph">Morph amount <output id="morphVal">100</output>%</label>
+    <input type="range" id="morph" min="0" max="100" value="100">
+    <button id="btnPlay" class="wide" title="Animate from the original to the simulated result">▶ Play morph</button>
+
+    <h3>Zoom</h3>
+    <div class="row">
+      <button id="btnZoomOut" title="Zoom out">−</button>
+      <button id="btnFit" title="Fit to screen (F)"><span id="zoomVal">100%</span></button>
+      <button id="btnZoomIn" title="Zoom in">+</button>
+    </div>
+  </aside>
+
+  <!-- ───────── Stage ───────── -->
+  <section class="stage-wrap">
+    <div class="view-tabs" id="viewTabs"></div>
+    <div class="stage" id="stage">
+      <canvas id="canvas"></canvas>
+      <div class="divider" id="divider" hidden><span class="knob" title="Drag to compare">◀ ▶</span></div>
+      <div class="divider" id="divider2" hidden><span class="knob" title="Drag to compare with the surgeon's image">◀ ▶</span></div>
+      <div class="hint3d only-3d" id="hint3d" hidden></div>
+      <div class="panel-tags only-3d" id="panelTags3d" hidden></div>
+      <div class="lm-prompt" id="lmPrompt" hidden></div>
+      <div class="gen3d only-3d" id="gen3d" hidden>
+        <div class="card">
+          <h2>3D model of the patient</h2>
+          <p>Build a realistic, to-scale 3D head of the patient from the front photo. The simulation is then applied to this model and shown from every angle, before and after.</p>
+          <button id="gen3dGo" class="primary">✦ Generate 3D model from front photo</button>
+          <div class="alt"><button id="gen3dLoad">Load a .glb from a scan</button><button id="gen3dPlaceholder" class="quiet">Use a placeholder head for now</button></div>
+          <p class="hint" id="gen3dHint"></p>
+        </div>
+      </div>
+      <div class="scalebar only-3d" id="scalebar" hidden><div class="bar"></div><span>20 mm</span></div>
+      <div class="empty only-2d" id="empty">
+        <div class="card">
+          <h2>Add the patient's photos</h2>
+          <p>Drop images here or</p>
+          <button id="btnAddFirst" class="primary">Choose photos…</button>
+          <ol>
+            <li>Use a front view and a profile view where possible. Plain background, neutral expression, hair away from the face.</li>
+            <li>Pick <strong>Push</strong>, <strong>Reduce</strong> or <strong>Augment</strong> and sculpt the planned change directly on the photo.</li>
+            <li>Compare with the slider, add notes, then print the summary or export the image.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+    <div class="compare-bar">
+      <span class="bar-label">Compare</span>
+      <div class="seg only-2d" id="compareSeg">
+        <button data-compare="slider" class="active">Slider</button>
+        <button data-compare="side">Side by side</button>
+        <button data-compare="fade">Fade</button>
+        <button data-compare="after">After only</button>
+        <button data-compare="mirror" title="Three panels: the actual face, then the left–left and right–right composites — the standard way to see asymmetry">Mirror</button>
+      </div>
+      <div class="seg only-3d" id="compare3dSeg">
+        <button data-compare="after" class="active">After only</button>
+        <button data-compare="side">Side by side</button>
+        <button data-compare="ghost" title="Original shape drawn as a translucent overlay on the simulated result">Ghost overlay</button>
+        <button data-compare="mirror" title="Three panels: the actual model, then the left–left and right–right composites built by mirroring each side across the facial midline">Mirror</button>
+      </div>
+      <span class="surgeon-wrap only-2d" id="surgeonWrap">
+        <button id="btnSurgeonImg" title="Add the surgeon's own simulation of this photo (e.g. made in Photoshop) as a third image: original, platform simulation and surgeon's simulation can then be compared with the slider or side by side">+ Surgeon's image</button>
+        <span class="surgeon-name" id="surgeonName" hidden></span>
+        <button id="btnSurgeonRemove" class="ghost" hidden title="Remove the surgeon's image from this photo">×</button>
+      </span>
+      <label class="check" id="gridWrap" title="Facial midline, horizontal thirds, vertical fifths, nose axis and profile E-line, on both before and after"><input type="checkbox" id="gridToggle"> Symmetry grid</label>
+      <span class="bar-label only-3d">View</span>
+      <div class="seg only-3d" id="viewSeg">
+        <button data-view="right">Right</button>
+        <button data-view="rightQ">¾ right</button>
+        <button data-view="front">Front</button>
+        <button data-view="leftQ">¾ left</button>
+        <button data-view="left">Left</button>
+      </div>
+      <label class="check only-3d"><input type="checkbox" id="autoRotate"> Auto-rotate</label>
+      <div id="fadeWrap" class="fade-wrap only-2d" hidden>
+        <input type="range" id="fade" min="0" max="100" value="100" aria-label="Fade between before and after">
+      </div>
+      <button id="btnPeek" class="peek" title="Hold to show the original (or hold Space)">Hold to show original</button>
+    </div>
+  </section>
+
+  <!-- ───────── Notes ───────── -->
+  <aside class="panel notes">
+    <h3>AI autopilot <span class="count" id="apEngine"></span></h3>
+    <div class="ap">
+      <div class="ap-banner" id="apBanner" hidden></div>
+      <div class="ap-sim only-2d" id="apSim">
+        <div class="row">
+          <button id="apSimulate" class="primary" title="Claude reads the notes and this photo, then the image model paints the photorealistic simulation">Generate AI image simulation</button>
+          <button id="apSimulateAll" title="Run the AI image simulation on every photo of this case">All photos</button>
+        </div>
+        <label class="check" id="apShowAiWrap" hidden><input type="checkbox" id="apShowAi" checked> Show the AI image as the simulated result</label>
+        <div class="ap-sim-status" id="apSimStatus" hidden></div>
+        <p class="hint" id="apSimHint">Uses “Planned changes”, “Consultation notes”, uploaded letters and the conversation below. Feedback typed below (“a bit less on the tip”) re-renders the image.</p>
+      </div>
+      <div class="ap-log" id="apLog"></div>
+      <div class="ap-status" id="apStatus"></div>
+      <textarea id="apInput" rows="2" placeholder="e.g. Reduce the dorsal hump by 2 mm and rotate the tip up 5°. Or patient feedback: the tip looks too upturned — a bit less."></textarea>
+      <div class="row">
+        <button id="apSend" class="primary">Apply</button>
+        <button id="apPlan" title="Apply the text in “Planned changes”">Apply planned changes</button>
+      </div>
+      <div class="row">
+        <button id="apNotes" title="Apply what the consultation notes describe">Apply consultation notes</button>
+        <button id="apUpload" title="Upload typed-up notes or a letter (PDF, Word, text or a photo); the plan is extracted and applied">Upload notes &amp; apply…</button>
+      </div>
+      <div class="row">
+        <button id="apSaveVersion" title="Keep the current simulation as a named version (Morph 1, Morph 2…)">Save as Morph <span id="apNextN">1</span></button>
+        <button id="apUndo" hidden>Undo last step</button>
+      </div>
+      <div class="ap-landmarks" id="apLandmarks"></div>
+    </div>
+
+    <h3>Versions <span class="count" id="verCount"></span></h3>
+    <div class="versions" id="versions">
+      <p class="hint" id="verHint">Save the simulation at any point as <strong>Morph 1</strong>, <strong>Morph 2</strong>… Show any version again, or compare two options with <strong>Compare</strong> (the “before” side then shows that version instead of the original).</p>
+      <div class="ver-list" id="verList"></div>
+      <div class="row ver-save"><input id="verName" placeholder="Name (e.g. Morph 2 — patient's preferred)"><button id="verSave" class="primary">Save version</button></div>
+    </div>
+
+    <h3>Patient &amp; procedure</h3>
+    <div class="row">
+      <div><label for="pName">Patient name</label><input id="pName" autocomplete="off" placeholder="Optional"></div>
+      <div><label for="pRef">Reference</label><input id="pRef" autocomplete="off" placeholder="Clinic ID"></div>
+    </div>
+    <label for="pDate">Consultation date</label>
+    <input type="date" id="pDate">
+    <label for="pProc">Procedure</label>
+    <select id="pProc"></select>
+    <div id="pOtherWrap" hidden>
+      <label for="pOther">Describe procedure</label>
+      <input id="pOther" placeholder="e.g. Revision rhinoplasty">
+    </div>
+
+    <div class="only-3d">
+      <h3>3D model of the patient</h3>
+      <div class="model-box">
+        <div id="modelStatus" class="model-status">Generic head</div>
+        <div class="row">
+          <button id="btnGenModel" class="primary" title="Build a realistic 3D model of the patient from the front photo with AI">✦ Generate 3D model from front photo</button>
+        </div>
+        <div class="gen-progress" id="genProgress" hidden><div class="bar"><div class="fill"></div></div><span class="txt"></span><button id="genCancel">Cancel</button></div>
+        <div class="row">
+          <button id="btnLoadModel">Load 3D model file…</button>
+          <button id="btnRemoveModel" hidden>Remove</button>
+        </div>
+        <div class="row turn" id="turnRow" hidden>
+          <span class="bar-label">Orientation</span>
+          <button data-turn="y:1" title="Turn left 90°">⟲</button>
+          <button data-turn="y:-1" title="Turn right 90°">⟳</button>
+          <button data-turn="x:2" title="Flip upside down">⇅</button>
+          <button data-turn="z:1" title="Roll 90°">↻</button>
+        </div>
+        <p class="hint"><strong>Generate</strong> sends the front photo to the AI 3D service and returns a realistic head of the patient in about one to three minutes; then confirm the landmarks and calibrate the scale. You can also load a <strong>.glb</strong> from a scanning app. Without a model, the photos are projected onto a generic head.</p>
+      </div>
+
+      <h3>Scale &amp; measurements</h3>
+      <div class="model-box">
+        <div id="scaleStatus" class="model-status"></div>
+        <p class="hint">Use the <strong>Measure</strong> tool: click two points whose real distance you know (pupil to pupil is usually 60–65 mm), then <strong>Set as…</strong> on that measurement to calibrate. Measurements update live while you sculpt and show the change.</p>
+        <div class="measure-list" id="measureList"></div>
+        <button id="btnClearMeasures" class="wide" hidden>Clear measurements</button>
+      </div>
+    </div>
+
+    <div class="only-3d" id="photoRoles">
+      <h3>Avatar photos</h3>
+      <p class="hint">The photos are projected onto a generic head. Use <strong>Align</strong> so the eyes and chin match. Areas without a photo are shown in a neutral skin tone.</p>
+      <div class="role"><label for="role-front">Front</label><div class="row"><select id="role-front" data-role="front"></select><button data-align="front">Align…</button></div></div>
+      <div class="role"><label for="role-right">Right profile <span class="count">(nose points right)</span></label><div class="row"><select id="role-right" data-role="right"></select><button data-align="right">Align…</button></div></div>
+      <div class="role"><label for="role-left">Left profile <span class="count">(nose points left)</span></label><div class="row"><select id="role-left" data-role="left"></select><button data-align="left">Align…</button></div></div>
+    </div>
+
+    <h3>Planned changes</h3>
+    <textarea id="nPlan" placeholder="e.g. Reduce dorsal hump by ~2 mm, refine and slightly rotate the tip, narrow the nasal bones. Preserve ethnic character of the nose."></textarea>
+
+    <h3>Consultation notes</h3>
+    <textarea id="nConsult" placeholder="Patient goals, concerns discussed, limitations explained, recovery expectations…"></textarea>
+
+    <h3>Letters &amp; documents <span class="count" id="docCount"></span></h3>
+    <div class="docs" id="docs">
+      <p class="hint">Attach the letters and notes sent to the patient (PDF, Word, images or text). They are kept with the case and listed on the printed summary. Drop files here or</p>
+      <button id="btnAddDocs" class="wide">Add documents…</button>
+      <div class="doc-list" id="docList"></div>
+    </div>
+
+    <h3>Photo notes <span class="count" id="pinCount"></span></h3>
+    <p class="hint" id="pinHint">Choose the <strong>Note</strong> tool and click on the photo or head to pin a numbered note.</p>
+    <div class="pin-list" id="pinList"></div>
+
+    <h3>Disclaimer shown on exports</h3>
+    <textarea id="nDisclaimer"></textarea>
+    <p class="hint">Nothing is sent to a server. The current case is kept in this browser until you start a new one. Use <strong>Save case</strong> to keep a file in the patient record.</p>
+  </aside>
+
+</main>
+
+<input type="file" id="filePhotos" accept="image/*" multiple hidden>
+<input type="file" id="fileSurgeon" accept="image/*" hidden>
+<input type="file" id="fileCase" accept=".json,application/json" hidden>
+<input type="file" id="fileModel" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden>
+<input type="file" id="fileNotes" accept=".pdf,.docx,.txt,.md,.rtf,image/*,application/pdf" hidden>
+<input type="file" id="fileDocs" multiple accept=".pdf,.doc,.docx,.odt,.rtf,.txt,.md,image/*,application/pdf,text/plain" hidden>
+<div class="modal" id="aiModal" hidden>
+  <div class="modal-card ai-card">
+    <h2>AI settings</h2>
+    <p class="hint">Claude reads the notes, the photos and the feedback and plans the simulation; OpenAI's image model paints the photorealistic result. Paste the keys once; they are kept in this browser only and sent to this app's own server functions with each AI request. Claude key: <strong>console.anthropic.com</strong> → API keys. OpenAI key: <strong>platform.openai.com</strong> → API keys.</p>
+    <p class="ai-note" id="aiNote" hidden></p>
+    <label for="aiClaudeKey">Claude API key</label>
+    <div class="row keyrow"><input id="aiClaudeKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…"><button id="aiShow" type="button" title="Show / hide">👁</button></div>
+    <div class="ai-status" id="aiClaudeStatus"></div>
+    <label for="aiOpenaiKey">OpenAI API key <span class="count">(for the photorealistic AI image simulation — gpt-image-1)</span></label>
+    <div class="row keyrow"><input id="aiOpenaiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-… from platform.openai.com → API keys"></div>
+    <div class="ai-status" id="aiOpenaiStatus"></div>
+    <label for="aiMeshyKey">Meshy API key <span class="count">(optional — only for generating the patient's 3D model)</span></label>
+    <div class="row keyrow"><input id="aiMeshyKey" type="password" autocomplete="off" spellcheck="false" placeholder="from meshy.ai → API"></div>
+    <div class="ai-status" id="aiMeshyStatus"></div>
+    <p class="hint">For a clinic-wide setup an administrator can instead set <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code> and <code>MESHY_API_KEY</code> in the Vercel project's environment variables; keys set there take priority and nothing needs to be entered here.</p>
+    <div class="modal-row">
+      <button id="aiRemove" class="danger">Remove keys from this browser</button>
+      <span class="spacer"></span>
+      <button id="aiClose">Close</button>
+      <button id="aiTest" class="primary">Test &amp; save</button>
+    </div>
+  </div>
+</div>
+<div class="modal" id="docModal" hidden>
+  <div class="modal-card doc-card">
+    <div class="doc-head"><h2 id="docTitle">Document</h2><span class="spacer"></span><a id="docDownload" class="btn-link" download>Download</a><button id="docClose">Close</button></div>
+    <div class="doc-body" id="docBody"></div>
+  </div>
+</div>
+<div class="modal" id="alignModal" hidden>
+  <div class="modal-card">
+    <h2 id="alignTitle">Align photo</h2>
+    <p class="hint">Drag the outline over the face and change its size until the <strong>eye</strong> and <strong>chin</strong> lines match the photo. Use the mouse wheel to resize.</p>
+    <canvas id="alignCanvas"></canvas>
+    <div class="modal-row">
+      <label class="inline">Size <input type="range" id="alignSize" min="10" max="80" value="26"></label>
+      <label class="check inline"><input type="checkbox" id="alignFlip"> Flip photo</label>
+      <button id="alignReset">Reset</button>
+      <span class="spacer"></span>
+      <button id="alignCancel">Cancel</button>
+      <button id="alignDone" class="primary">Done</button>
+    </div>
+  </div>
+</div>
+<section id="printArea" class="print-only" aria-hidden="true"></section>
+
+<script src="app.js"></script>
+<script src="autopilot.js"></script>
+<script type="module" src="extract.js"></script>
+<script type="module" src="facedetect.js"></script>
+<script type="module" src="avatar.js"></script>
+</body>
+</html>

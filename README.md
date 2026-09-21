@@ -169,3 +169,120 @@ normally rather than staying at `opacity: 0`.
 **Browser support.** Modern evergreen browsers. Uses CSS nesting-free plain CSS, custom
 properties, `clamp()`, `aspect-ratio`, `clip-path` and `grid-template-rows` transitions for
 the accordion.
+
+---
+
+## Morph Studio (`morph-studio/`)
+
+A separate, self-contained tool for facial surgeons: a before / after simulation aid for
+rhinoplasty and similar procedures, used during consultation to set expectations.
+Live at **https://morph-studio-two.vercel.app** (Vercel, built from this branch), or open
+`morph-studio/index.html` locally in a modern browser (Chrome, Edge, Safari, Firefox; works on
+an iPad). Nothing is uploaded anywhere — photos, edits and notes stay on the device.
+
+**Symmetry grid & mirror** — a *Symmetry grid* toggle overlays the facial midline, horizontal
+thirds, vertical fifths and the nose axis (with its deviation from the midline) on front views,
+and the facial vertical, E-line and nasolabial angle on profiles, on both before and after,
+in 2D and as planes on the 3D model. The *Mirror* comparison shows three panels — the
+patient's actual face, then the left–left and right–right composites (each side mirrored
+across the facial midline) — on the photos and on the 3D model, before and after, so
+asymmetry is visible at a glance.
+
+**Photo morph** — upload the patient's photos (front, profiles), then sculpt the planned
+change directly on the photo with Push / Reduce / Augment / Restore brushes. Compare with a
+slider, side by side, a fade, a morph animation, or by holding *Space* to peek at the original.
+**Surgeon's own simulation** — *+ Surgeon's image* in the compare bar attaches a simulation
+the surgeon made outside the platform (e.g. in Photoshop) to the current photo. The slider
+then has two handles (original | platform simulation | surgeon's simulation), *Side by side*
+shows all three on one screen, and the export sheet and printed summary carry the third
+image. The image is saved with the case.
+
+**3D avatar** — a rotatable, to-scale 3D model of the patient. Load a realistic model
+(`.glb`) produced from the patient's photo by an image-to-3D service (Tripo, Meshy,
+Hunyuan3D…) or a phone scanning app; without one, the photos are projected onto a generic
+head. Drag to rotate, wheel to zoom, view presets, auto-rotate. Sculpt with Grab / Reduce /
+Augment / Smooth / Restore (left-right symmetry on by default). Compare after-only, side by
+side, a ghost overlay of the original, a morph slider, or hold Space. **Scale**: measure any
+two points in millimetres, calibrate against a known distance (e.g. pupil to pupil), brush
+size shown in mm, a scale bar, and measurements that update live to show the before/after
+change.
+
+**AI image simulation (the main workflow)** — *Generate AI image simulation* in the AI
+autopilot panel turns the surgeon's notes into a photorealistic before/after photo, with no
+manual editing: Claude reads the patient photo together with “Planned changes”, “Consultation
+notes”, uploaded letters and the conversation (patient feedback included), and writes a precise
+edit instruction plus the region of the face allowed to change (`api/simulate.js`, action
+`plan`); OpenAI's image model (`gpt-image-1`, high input fidelity, masked to that region) then
+paints the result (action `render`). The AI image becomes the “Simulated” side of every
+comparison (slider, side by side, fade, mirror, export, print) and is saved with the case and
+with each *Morph n* version. Feedback typed into the chat (“a bit less on the tip”) re-plans
+and re-renders; *All photos* runs it on every view. Needs a Claude key and an OpenAI key
+(AI settings, or `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` on the server; `OPENAI_IMAGE_MODEL`
+and `OPENAI_IMAGE_QUALITY` are optional overrides). The brush tools still work on the manual
+layer underneath; “Show the AI image” switches between the two.
+
+**AI autopilot** — instead of sculpting by hand, the surgeon types the change ("reduce the
+dorsal hump by 2 mm and rotate the tip up 5°"), presses *Apply planned changes* / *Apply
+consultation notes*, or relays the patient's feedback ("the tip looks too upturned — a bit
+less"). The instruction is turned into anatomical edits in millimetres and applied live to
+the 3D model and to the front/profile photos, one undo step per instruction. Understanding
+comes from Claude through `api/autopilot.js` when the deployment has an `ANTHROPIC_API_KEY`;
+without it a built-in phrase parser handles the common phrasings. Edits are anchored to
+seven landmarks (pupils, nasion, rhinion, tip, subnasale, chin) that are **found
+automatically**: a face detector (`facedetect.js`, vendored face-api with 68-point landmarks,
+running in the browser) scans every uploaded photo and a rendered view of the 3D model;
+profile photos go to Claude vision (`api/landmarks.js`) when a Claude key is connected. The
+3D detector looks at the model from several directions, so a generated model that arrives
+facing sideways is turned to face the surgeon. The surgeon never places landmarks by hand;
+*Re-detect* and *Adjust* are there only to check them.
+
+**AI 3D model of the patient** — the 3D tab opens on *Generate 3D model*: the front photo
+and any profile photos go to Meshy's image-to-3D API through `api/generate3d.js` (one photo
+uses image-to-3D, several use multi-image-to-3D for a better likeness; needs a Meshy key from
+*AI settings* or `MESHY_API_KEY`). There is no consent pop-up — consent is the clinic's,
+already given by the patient. If only one photo is available the app asks for profile photos
+but still generates. Progress is shown and the finished head is loaded, landmarked and
+calibrated automatically. A `.glb` from another service or a phone scan can be loaded
+instead. A generic placeholder head is available only on request.
+
+**Notes upload** — *Upload notes & apply* (or *Read & apply* on any attached document) reads
+typed-up consultation notes or letters (PDF via the vendored pdf.js, Word `.docx`, text; scans
+and photos of notes through `api/extract.js` with Claude vision), extracts the surgical plan
+and applies it. Statements such as "no change to the chin" are respected.
+
+**Versions ("Morph 1", "Morph 2"…)** — save the simulation at any point as a named version
+(one click from the autopilot panel or with a custom name), show any version again, and
+*Compare* two options: the "before" side of every comparison mode (slider, side by side,
+ghost, hold Space) then shows the chosen version instead of the original. Versions are saved
+with the case and printed on the summary with front and profile images.
+
+**Consultation record** — patient name / reference / date / procedure, planned changes,
+consultation notes, numbered notes pinned to the photo or the head, letters and documents
+sent to the patient (PDF, Word, images, text — previewed in the app), the autopilot
+conversation, and an editable disclaimer. *Print summary* produces a printable
+(or save-as-PDF) sheet with before/after images from every photo, five angles of the avatar
+with a measurement table, notes, the document list and signature lines. *Export image*
+downloads a labelled before/after PNG. *Save case* downloads a `.json` file (including the
+3D model and documents) that can be reopened later; the current case is also kept in the
+browser (IndexedDB) so an accidental refresh loses nothing.
+
+**Connecting the AI** — click *AI settings* in the top bar and paste a Claude API key
+(console.anthropic.com → API keys) and an OpenAI API key (platform.openai.com → API keys);
+*Test & save* confirms both connections. The keys are kept in that browser only and travel
+with each AI request to the app's own serverless functions, which never store them. A Meshy
+key can be added the same way for AI 3D generation. For a clinic-wide setup an administrator
+can instead set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `MESHY_API_KEY` in the Vercel
+project's environment variables; those take priority.
+
+**Deployment** — static files plus Vercel serverless functions in `api/` (`autopilot`,
+`extract`, `generate3d`, `health`, `landmarks`, `simulate`). Optional overrides: `AUTOPILOT_MODEL`, `EXTRACT_MODEL`,
+`MESHY_MODEL`, `MESHY_POLYCOUNT`. `build.sh` is the Vercel build command; it fetches this
+branch from GitHub into `public/`.
+
+Files: `index.html`, `styles.css`, `app.js` (2D warp engine, notes, save/print/export),
+`avatar.js` (3D model loading, generic head, texture projection, sculpting, landmarks,
+measurements, three-panel mirror), `facedetect.js` (automatic landmarks), `autopilot.js`
+(anatomy semantics, phrase parser, chat), `extract.js` (notes/PDF/DOCX text), the
+serverless functions in `api/`, and vendored copies of [three.js](https://threejs.org) r170,
+[pdf.js](https://mozilla.github.io/pdf.js/) and [face-api](https://github.com/vladmandic/face-api)
+(all MIT) in `vendor/` so the app itself works offline.

@@ -1,0 +1,6 @@
+{
+  "functions": { "api/*.js": { "maxDuration": 60, "memory": 1024 } },
+  "headers": [
+    { "source": "/(.*)", "headers": [ { "key": "X-Robots-Tag", "value": "noindex" } ] }
+  ]
+}
