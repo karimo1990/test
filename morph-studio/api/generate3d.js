@@ -6,15 +6,18 @@
 import { meshyKey } from './_keys.js';
 
 const MESHY = 'https://api.meshy.ai/openapi/v1/image-to-3d';
+const MESHY_MULTI = 'https://api.meshy.ai/openapi/v1/multi-image-to-3d';
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;   // base64 data URI size accepted from the browser
 const MAX_PROXY_BYTES = 4 * 1024 * 1024;    // Vercel function response limit is ~4.5 MB
 
 let currentKey = '';
 const headers = () => ({ Authorization: `Bearer ${currentKey}`, 'Content-Type': 'application/json' });
 
-async function startTask(imageDataUri) {
+async function startTask(images) {
+  // One photo → image-to-3d; front + profiles → multi-image-to-3d (first image is the front view).
+  const multi = images.length > 1;
   const body = {
-    image_url: imageDataUri,
+    ...(multi ? { image_urls: images.slice(0, 4) } : { image_url: images[0] }),
     ai_model: process.env.MESHY_MODEL || 'latest',
     should_texture: true,
     enable_pbr: false,
@@ -24,15 +27,15 @@ async function startTask(imageDataUri) {
     image_enhancement: false,   // keep the patient's exact appearance
     target_formats: ['glb'],
   };
-  const r = await fetch(MESHY, { method: 'POST', headers: headers(), body: JSON.stringify(body) });
+  const r = await fetch(multi ? MESHY_MULTI : MESHY, { method: 'POST', headers: headers(), body: JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(data.message || `Meshy error ${r.status}`), { status: r.status });
   const id = data.result || data.id;
   if (!id) throw new Error('Meshy did not return a task id.');
-  return id;
+  return { id, multi };
 }
-async function getTask(id) {
-  const r = await fetch(`${MESHY}/${encodeURIComponent(id)}`, { headers: headers() });
+async function getTask(id, multi) {
+  const r = await fetch(`${multi ? MESHY_MULTI : MESHY}/${encodeURIComponent(id)}`, { headers: headers() });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(data.message || `Meshy error ${r.status}`), { status: r.status });
   return data;
@@ -49,22 +52,22 @@ export default async function handler(req, res) {
   const action = body?.action;
   try {
     if (action === 'start') {
-      const img = String(body.image || '');
-      if (!/^data:image\/(jpeg|jpg|png);base64,/.test(img)) return res.status(400).json({ error: 'bad_image', message: 'Send a JPEG or PNG data URI.' });
-      if (img.length > MAX_IMAGE_BYTES * 1.37) return res.status(413).json({ error: 'too_large', message: 'Image larger than 12 MB.' });
-      const id = await startTask(img);
-      return res.status(200).json({ task_id: id, provider: 'meshy' });
+      const images = (Array.isArray(body.images) ? body.images : [body.image]).filter(Boolean).map(String);
+      if (!images.length || !images.every(img => /^data:image\/(jpeg|jpg|png);base64,/.test(img))) return res.status(400).json({ error: 'bad_image', message: 'Send JPEG or PNG data URIs.' });
+      if (images.some(img => img.length > MAX_IMAGE_BYTES * 1.37)) return res.status(413).json({ error: 'too_large', message: 'Image larger than 12 MB.' });
+      const { id, multi } = await startTask(images);
+      return res.status(200).json({ task_id: id, provider: 'meshy', multi, images: images.length });
     }
     if (action === 'status') {
       const id = String(body.task_id || ''); if (!/^[\w-]{6,80}$/.test(id)) return res.status(400).json({ error: 'bad_task' });
-      const t = await getTask(id);
+      const t = await getTask(id, !!body.multi);
       const status = normaliseStatus(t.status);
       return res.status(200).json({ status, progress: Number(t.progress) || 0, preceding: t.preceding_tasks ?? null, glb_url: status === 'succeeded' ? (t.model_urls && t.model_urls.glb) || null : null, error: status === 'failed' ? (t.task_error && t.task_error.message) || 'Generation failed.' : null });
     }
     if (action === 'fetch') {
       // Proxy the GLB when the browser cannot download it directly (CORS). Small files only.
       const id = String(body.task_id || ''); if (!/^[\w-]{6,80}$/.test(id)) return res.status(400).json({ error: 'bad_task' });
-      const t = await getTask(id);
+      const t = await getTask(id, !!body.multi);
       const url = t.model_urls && t.model_urls.glb;
       if (normaliseStatus(t.status) !== 'succeeded' || !url) return res.status(409).json({ error: 'not_ready' });
       const r = await fetch(url);

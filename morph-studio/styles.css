@@ -93,6 +93,11 @@ h3:first-child { margin-top: 0; }
 }
 
 /* Compare bar */
+.surgeon-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.surgeon-name { font-size: 12px; color: var(--muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.surgeon-wrap .ghost { padding: 2px 8px; }
+#printArea .pair figure { flex: 1; min-width: 0; }
+
 .compare-bar .check { margin: 0; }
 .compare-bar { display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: #fff; border-top: 1px solid var(--line); flex-wrap: wrap; }
 .bar-label { font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -125,6 +130,9 @@ label.inline input[type="range"] { width: 140px; }
 .role label { margin-top: 8px; }
 .role select { flex: 1; }
 .role button { flex: 0 0 auto; }
+.panel-tags { position: absolute; left: 0; right: 0; top: 8px; display: flex; pointer-events: none; }
+.panel-tags span { flex: 1; padding: 0 8px; }
+.panel-tags b { display: inline-block; font-size: 12px; font-weight: 600; color: #bff3f5; background: rgba(22,33,46,.75); border-radius: 6px; padding: 3px 8px; }
 .hint3d { position: absolute; left: 12px; top: 12px; background: rgba(255,255,255,.92); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 12px; color: var(--muted); max-width: 360px; pointer-events: none; }
 
 .model-box { border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
@@ -184,6 +192,7 @@ label.inline input[type="range"] { width: 140px; }
 .ai-card label { margin-top: 14px; }
 .keyrow input { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .keyrow button { flex: 0 0 auto; }
+.ai-note { background: #fff7e6; border: 1px solid #f5d38a; color: #7a4b00; border-radius: 8px; padding: 8px 10px; font-size: 13px; margin: 8px 0 0; }
 .ai-status { font-size: 12px; margin-top: 6px; min-height: 16px; color: var(--muted); }
 .ai-status.ok { color: #1a7f37; font-weight: 600; }
 .ai-status.bad { color: var(--danger); font-weight: 600; }

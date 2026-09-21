@@ -183,13 +183,19 @@ an iPad). Nothing is uploaded anywhere — photos, edits and notes stay on the d
 **Symmetry grid & mirror** — a *Symmetry grid* toggle overlays the facial midline, horizontal
 thirds, vertical fifths and the nose axis (with its deviation from the midline) on front views,
 and the facial vertical, E-line and nasolabial angle on profiles, on both before and after,
-in 2D and as planes on the 3D model. The *Mirror* comparison shows left–left and right–right
-composites of the face (photos) and a depth-tested mirrored ghost on the 3D model, so
-asymmetry before and after is visible at a glance.
+in 2D and as planes on the 3D model. The *Mirror* comparison shows three panels — the
+patient's actual face, then the left–left and right–right composites (each side mirrored
+across the facial midline) — on the photos and on the 3D model, before and after, so
+asymmetry is visible at a glance.
 
 **Photo morph** — upload the patient's photos (front, profiles), then sculpt the planned
 change directly on the photo with Push / Reduce / Augment / Restore brushes. Compare with a
 slider, side by side, a fade, a morph animation, or by holding *Space* to peek at the original.
+**Surgeon's own simulation** — *+ Surgeon's image* in the compare bar attaches a simulation
+the surgeon made outside the platform (e.g. in Photoshop) to the current photo. The slider
+then has two handles (original | platform simulation | surgeon's simulation), *Side by side*
+shows all three on one screen, and the export sheet and printed summary carry the third
+image. The image is saved with the case.
 
 **3D avatar** — a rotatable, to-scale 3D model of the patient. Load a realistic model
 (`.glb`) produced from the patient's photo by an image-to-3D service (Tripo, Meshy,
@@ -208,15 +214,22 @@ less"). The instruction is turned into anatomical edits in millimetres and appli
 the 3D model and to the front/profile photos, one undo step per instruction. Understanding
 comes from Claude through `api/autopilot.js` when the deployment has an `ANTHROPIC_API_KEY`;
 without it a built-in phrase parser handles the common phrasings. Edits are anchored to
-seven landmarks (pupils, nasion, rhinion, tip, subnasale, chin) that the surgeon confirms
-with the *Landmarks* tool; the generic head sets them automatically, a generated model gets
-a first guess.
+seven landmarks (pupils, nasion, rhinion, tip, subnasale, chin) that are **found
+automatically**: a face detector (`facedetect.js`, vendored face-api with 68-point landmarks,
+running in the browser) scans every uploaded photo and a rendered view of the 3D model;
+profile photos go to Claude vision (`api/landmarks.js`) when a Claude key is connected. The
+3D detector looks at the model from several directions, so a generated model that arrives
+facing sideways is turned to face the surgeon. The surgeon never places landmarks by hand;
+*Re-detect* and *Adjust* are there only to check them.
 
-**AI 3D model of the patient** — the 3D tab opens on *Generate 3D model from front photo*:
-the photo goes to Meshy's image-to-3D API through `api/generate3d.js` (needs `MESHY_API_KEY`),
-progress is shown, and the finished head of the patient is loaded, landmarked and calibrated.
-A `.glb` from another service or a phone scan can be loaded instead. A generic placeholder
-head is available only on request.
+**AI 3D model of the patient** — the 3D tab opens on *Generate 3D model*: the front photo
+and any profile photos go to Meshy's image-to-3D API through `api/generate3d.js` (one photo
+uses image-to-3D, several use multi-image-to-3D for a better likeness; needs a Meshy key from
+*AI settings* or `MESHY_API_KEY`). There is no consent pop-up — consent is the clinic's,
+already given by the patient. If only one photo is available the app asks for profile photos
+but still generates. Progress is shown and the finished head is loaded, landmarked and
+calibrated automatically. A `.glb` from another service or a phone scan can be loaded
+instead. A generic placeholder head is available only on request.
 
 **Notes upload** — *Upload notes & apply* (or *Read & apply* on any attached document) reads
 typed-up consultation notes or letters (PDF via the vendored pdf.js, Word `.docx`, text; scans
@@ -247,12 +260,14 @@ clinic-wide setup an administrator can instead set `ANTHROPIC_API_KEY` / `MESHY_
 the Vercel project's environment variables; those take priority.
 
 **Deployment** — static files plus Vercel serverless functions in `api/` (`autopilot`,
-`extract`, `generate3d`, `health`). Optional overrides: `AUTOPILOT_MODEL`, `EXTRACT_MODEL`,
+`extract`, `generate3d`, `health`, `landmarks`). Optional overrides: `AUTOPILOT_MODEL`, `EXTRACT_MODEL`,
 `MESHY_MODEL`, `MESHY_POLYCOUNT`. `build.sh` is the Vercel build command; it fetches this
 branch from GitHub into `public/`.
 
 Files: `index.html`, `styles.css`, `app.js` (2D warp engine, notes, save/print/export),
 `avatar.js` (3D model loading, generic head, texture projection, sculpting, landmarks,
-measurements), `autopilot.js` (anatomy semantics, phrase parser, chat), `api/autopilot.js`
-and `api/generate3d.js` (serverless), and a vendored copy of [three.js](https://threejs.org)
-r170 (MIT) in `vendor/three/` so the app itself works offline.
+measurements, three-panel mirror), `facedetect.js` (automatic landmarks), `autopilot.js`
+(anatomy semantics, phrase parser, chat), `extract.js` (notes/PDF/DOCX text), the
+serverless functions in `api/`, and vendored copies of [three.js](https://threejs.org) r170,
+[pdf.js](https://mozilla.github.io/pdf.js/) and [face-api](https://github.com/vladmandic/face-api)
+(all MIT) in `vendor/` so the app itself works offline.

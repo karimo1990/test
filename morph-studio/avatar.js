@@ -267,8 +267,8 @@ function applyTurn(axis, quarterTurns) {
     const v = new THREE.Vector3();
     for (let i = 0; i < p.base.length; i += 3) { v.set(p.base[i], p.base[i + 1], p.base[i + 2]).applyMatrix4(m4); p.base[i] = v.x; p.base[i + 1] = v.y; p.base[i + 2] = v.z; }
     p.cur.set(p.base); p.geo.attributes.position.array.set(p.base);
-    p.geo.attributes.position.needsUpdate = true; p.geo.computeVertexNormals();
-    p.beforeMesh.geometry.attributes.position.needsUpdate = true; p.beforeMesh.geometry.computeVertexNormals();
+    p.geo.attributes.position.needsUpdate = true; p.geo.computeVertexNormals(); p.geo.computeBoundingBox(); p.geo.computeBoundingSphere();
+    p.beforeMesh.geometry.attributes.position.needsUpdate = true; p.beforeMesh.geometry.computeVertexNormals(); p.beforeMesh.geometry.computeBoundingBox(); p.beforeMesh.geometry.computeBoundingSphere();
   }
 }
 A.turnModel = function (axis, quarterTurns) {
@@ -368,7 +368,9 @@ function frame() {
   const w = renderer.domElement.width / renderer.getPixelRatio(), h = renderer.domElement.height / renderer.getPixelRatio();
   const showAfter = !A.showBefore;
   if (A.hideModel) { afterGroup.visible = beforeGroup.visible = pinGroup.visible = measureGroup.visible = landmarkGroup.visible = ring.visible = false; renderer.setScissorTest(false); camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setViewport(0, 0, w, h); renderer.render(scene, camera); afterGroup.visible = beforeGroup.visible = true; return; }
-  if (A.compare === 'side' && !A.showBefore) {
+  if (A.compare === 'mirror' && parts().length) {
+    renderMirrorPanels(w, h, showAfter);
+  } else if (A.compare === 'side' && !A.showBefore) {
     renderer.setScissorTest(true);
     camera.aspect = (w / 2) / h; camera.updateProjectionMatrix();
     beforeGroup.visible = true; afterGroup.visible = false; pinGroup.visible = false; measureGroup.visible = false; landmarkGroup.visible = false; ring.visible = false;
@@ -381,13 +383,6 @@ function frame() {
     beforeGroup.visible = !showAfter; afterGroup.visible = showAfter; pinGroup.visible = showAfter;
     ring.visible = showAfter && !!hoverHit && isSculpt() && !stroke;
     renderer.setViewport(0, 0, w, h); renderer.render(scene, camera);
-    if (A.compare === 'mirror' && showAfter && parts().length) {
-      // Mirror image of the simulated face across the facial midline, drawn as an amber ghost.
-      const savedClear = renderer.autoClear;
-      afterGroup.visible = false; beforeGroup.visible = false; pinGroup.visible = false; measureGroup.visible = false; landmarkGroup.visible = false; ring.visible = false; gridGroup.visible = false;
-      mirrorGroup.visible = true; renderer.autoClear = false; renderer.render(scene, camera);
-      mirrorGroup.visible = false; renderer.autoClear = savedClear; gridGroup.visible = A.grid;
-    }
     if (A.compare === 'ghost' && showAfter) {
       // Translucent overlay of the original shape over the simulated result.
       const savedOverride = scene.overrideMaterial, savedClear = renderer.autoClear;
@@ -415,8 +410,16 @@ A.zoomBy = function (f) {
   camera.position.copy(controls.target).add(dir.setLength(d)); controls.update();
 };
 A.setAutoRotate = on => { A.autoRotate = !!on; };
-A.setCompare = m => { A.compare = m; };
-A.setShowBefore = on => { A.showBefore = !!on; };
+A.setCompare = m => { A.compare = m; A.onPanels(); };
+A.panelLabels = function () {
+  if (!parts().length || A.hideModel) return [];
+  const who = A.showBefore ? 'Original' : 'Simulated';
+  if (A.compare === 'mirror') return [`${who} (actual)`, `${who} left–left`, `${who} right–right`];
+  if (A.compare === 'side' && !A.showBefore) return ['Before', 'Simulated after'];
+  return [];
+};
+A.onPanels = () => {};
+A.setShowBefore = on => { A.showBefore = !!on; A.onPanels(); };
 A.setTool = function (t) {
   A.tool = t;
   const orbit = t === 'orbit';
@@ -445,6 +448,7 @@ function ndcFromEvent(e) {
   const r = renderer.domElement.getBoundingClientRect();
   let x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
   if (A.compare === 'side' && !A.showBefore) { if (x < 0.5) return null; x = (x - 0.5) * 2; }
+  if (A.compare === 'mirror' && parts().length) { if (x > 1 / 3) return null; x *= 3; }
   return new THREE.Vector2(x * 2 - 1, -(y * 2 - 1));
 }
 function raycastNdc(ndc) {
@@ -873,6 +877,84 @@ function guessLandmarksGLB() {
   }
   rebuildLandmarkSprites(); A.onLandmarks();
 }
+/* Automatic landmarks: render the front view, run the caller's 2D detector on it, and project
+   each detected point back onto the mesh with a ray from the same camera. */
+let autoLmRun = null;
+A.autoLandmarks = function (detect, size = 768) {
+  if (autoLmRun) return autoLmRun;                                        // one detection at a time
+  autoLmRun = autoLandmarksRun(detect, size).finally(() => { autoLmRun = null; });
+  return autoLmRun;
+};
+A.autoLandmarksBusy = () => !!autoLmRun;
+async function autoLandmarksRun(detect, size) {
+  if (!parts().length) return { ok: false, reason: 'no model' };
+  if (!off) { off = new THREE.WebGLRenderer({ antialias: true, alpha: false }); off.setPixelRatio(1); off.setClearColor(0xffffff, 1); }
+  off.setSize(size, size, false);
+  const savedPos = camera.position.clone(), savedQuat = camera.quaternion.clone(), savedAspect = camera.aspect, savedMorph = A.morph;
+  const savedHide = A.hideModel; A.hideModel = false;
+  if (savedMorph < 1) A.setMorph(1);
+  beforeGroup.visible = false; afterGroup.visible = true; pinGroup.visible = false; measureGroup.visible = false; landmarkGroup.visible = false; gridGroup.visible = false; ring.visible = false;
+  const restore = () => {
+    A.hideModel = savedHide; beforeGroup.visible = afterGroup.visible = true; ring.visible = false; gridGroup.visible = A.grid; pinGroup.visible = measureGroup.visible = landmarkGroup.visible = true;
+    camera.position.copy(savedPos); camera.quaternion.copy(savedQuat); camera.aspect = savedAspect; camera.updateProjectionMatrix();
+    if (savedMorph < 1) A.setMorph(savedMorph);
+  };
+  // Look at the model from several directions: generated models do not always face +Z, so the
+  // detector decides where the face is. The most frontal, most confident detection wins.
+  const angles = [0, 90, -90, 180, 45, -45, 135, -135];
+  const snap = document.createElement('canvas'); snap.width = snap.height = size; const sctx = snap.getContext('2d');
+  let best = null, error = null;
+  const look = deg => {
+    const box = modelBounds(), c = box.getCenter(new THREE.Vector3()), h = box.getSize(new THREE.Vector3()).y;
+    const d = (h * 0.62) / Math.tan(camera.fov * Math.PI / 360), t = deg * Math.PI / 180;
+    camera.position.set(c.x + d * Math.sin(t), c.y, c.z + d * Math.cos(t)); camera.lookAt(c.x, c.y, c.z); camera.aspect = 1; camera.updateProjectionMatrix(); camera.updateMatrixWorld(true);
+  };
+  const breathe = () => new Promise(r => setTimeout(r, 0));                // keep the UI responsive between angles
+  const scan = async (list, opts) => {
+    for (const deg of list) {
+      look(deg); off.render(scene, camera); sctx.drawImage(off.domElement, 0, 0);
+      let r = null;
+      try { r = await detect(snap, opts); } catch (e) { error = e; return; }
+      await breathe();
+      if (!r || !r.landmarks) continue;
+      const frontal = Math.abs(r.yaw || 0), quality = (r.score || 0) - frontal * 0.6;
+      if (!best || quality > best.quality) best = { deg, r, quality, frontal };
+      if (deg === 0 && frontal < 0.08 && (r.score || 0) > 0.6) return;      // already facing the camera
+    }
+  };
+  await scan(angles, { sizes: [416], thorough: false });                     // quick pass around the head
+  if (!best && !error) await scan([0, 90, -90, 180], {});                    // thorough pass on the main directions
+  if (best && !error && best.deg % 90 !== 0) {                               // seen obliquely: check the nearest main direction properly
+    const near = Math.round(best.deg / 90) * 90, prev = best; best = null;
+    await scan([near], {});
+    if (!best || best.quality < prev.quality - 0.25) best = prev;
+  }
+  if (error || !best) { restore(); return { ok: false, reason: error ? error.message : 'no face detected on the model', found: 0 }; }
+  // If the face was found off-axis by a quarter turn, turn the model so it faces the surgeon
+  // (only when nothing has been sculpted yet, because turning bakes into the base shape).
+  let turned = 0;
+  const q = Math.round(-best.deg / 90);
+  if (q !== 0 && !isGeneric() && !A.history.length) {
+    applyTurn('y', q); A.model.turns.push({ axis: 'y', q }); turned = q * 90; best.deg += turned;   // same view of the face, model now facing front
+  }
+  look(best.deg);
+  const found = {};
+  for (const [name, pt] of Object.entries(best.r.landmarks)) {
+    const ndc = new THREE.Vector2((pt.x / size) * 2 - 1, -((pt.y / size) * 2 - 1));
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(parts().map(p => p.mesh), false);
+    if (hits.length) { const hit = hits[0]; hit.partIndex = parts().findIndex(p => p.mesh === hit.object); found[name] = { part: hit.partIndex, vi: closestVertex(hit) }; }
+  }
+  restore();
+  const n = Object.keys(found).length;
+  if (n >= 5) {
+    A.landmarks = { ...A.landmarks, ...found }; A.landmarkStep = -1; rebuildLandmarkSprites(); if (A.grid) rebuildGrid();
+    if (turned) { A.history = []; A.redo = []; A.onHistory(); }
+    A.onLandmarks(); A.onDirty();
+    return { ok: true, found: n, yaw: best.r.yaw, score: best.r.score, turned };
+  }
+  return { ok: false, reason: `only ${n} points found`, found: n };
+}
 A.startLandmarks = function () { A.landmarkStep = 0; A.setTool('landmark'); A.onLandmarks(); };
 A.skipLandmark = function () { if (A.landmarkStep >= 0) { A.landmarkStep++; if (A.landmarkStep >= LANDMARK_NAMES.length) A.landmarkStep = -1; A.onLandmarks(); } };
 A.finishLandmarks = function () { A.landmarkStep = -1; A.onLandmarks(); };
@@ -995,8 +1077,37 @@ A.setGrid = on => { A.grid = !!on; if (A.grid) rebuildGrid(); };
 A.refreshGrid = () => { if (A.grid) rebuildGrid(); };
 function rebuildMirror() {
   while (mirrorGroup.children.length) mirrorGroup.children.pop();
-  for (const p of parts()) { const m = new THREE.Mesh(p.geo, mirrorMaterial); mirrorGroup.add(m); }
+  for (const p of parts()) {
+    const a = new THREE.Mesh(p.geo, p.mesh.material); a.userData.kind = 'after'; mirrorGroup.add(a);
+    const b = new THREE.Mesh(p.beforeMesh.geometry, p.beforeMesh.material); b.userData.kind = 'before'; mirrorGroup.add(b);
+  }
   syncMirror();
+}
+/* Three-panel mirror view: the actual face, then the left–left and right–right composites.
+   Each composite is the real half of the face plus its mirror image across the facial midline. */
+const clipPlane = new THREE.Plane();
+function renderMirrorPanels(w, h, showAfter) {
+  const pw = w / 3, mx = midlineX();
+  renderer.setScissorTest(true);
+  camera.aspect = pw / h; camera.updateProjectionMatrix();
+  const savedClear = renderer.autoClear;
+  const showGroups = (after, before, extras) => { afterGroup.visible = after; beforeGroup.visible = before; pinGroup.visible = extras && showAfter; measureGroup.visible = extras && showAfter; landmarkGroup.visible = extras && showAfter && (A.showLandmarks || A.tool === 'landmark'); ring.visible = extras && showAfter && !!hoverHit && isSculpt() && !stroke; };
+  const panel = i => { renderer.setViewport(i * pw, 0, pw, h); renderer.setScissor(i * pw, 0, pw, h); };
+  // 1. actual
+  panel(0); showGroups(showAfter, !showAfter, true); mirrorGroup.visible = false; gridGroup.visible = A.grid; renderer.render(scene, camera);
+  // 2 & 3. composites: real side clipped to one half, mirrored copy clipped to the other half
+  for (const m of mirrorGroup.children) m.visible = m.userData.kind === (showAfter ? 'after' : 'before');
+  for (const [i, sign] of [[1, 1], [2, -1]]) {
+    panel(i);
+    showGroups(showAfter, !showAfter, false); mirrorGroup.visible = false; gridGroup.visible = false;
+    clipPlane.set(new THREE.Vector3(-sign, 0, 0), sign * mx); renderer.clippingPlanes = [clipPlane]; renderer.autoClear = savedClear; renderer.render(scene, camera);
+    afterGroup.visible = beforeGroup.visible = false; mirrorGroup.visible = true;
+    clipPlane.set(new THREE.Vector3(sign, 0, 0), -sign * mx); renderer.autoClear = false; renderer.render(scene, camera);
+    mirrorGroup.visible = false; renderer.clippingPlanes = [];
+    if (A.grid) { gridGroup.visible = true; renderer.render(scene, camera); }
+    renderer.autoClear = savedClear;
+  }
+  gridGroup.visible = A.grid; renderer.setScissorTest(false);
 }
 function syncMirror() {
   if (!mirrorGroup.children.length) return;

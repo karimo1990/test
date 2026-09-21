@@ -40,7 +40,7 @@ const state = {
   strength: 50,
   morph: 1,
   compare: 'slider',
-  divider: 0.5,
+  divider: 0.5, divider2: 0.66,
   fade: 1,
   zoom: 1, panX: 0, panY: 0,
   grid: false,
@@ -51,7 +51,7 @@ const state = {
 };
 
 const el = {
-  stage: $('#stage'), canvas: $('#canvas'), empty: $('#empty'), divider: $('#divider'),
+  stage: $('#stage'), canvas: $('#canvas'), empty: $('#empty'), divider: $('#divider'), divider2: $('#divider2'), fileSurgeon: $('#fileSurgeon'),
   viewTabs: $('#viewTabs'), filePhotos: $('#filePhotos'), fileCase: $('#fileCase'),
   brush: $('#brush'), brushVal: $('#brushVal'), strength: $('#strength'), strengthVal: $('#strengthVal'),
   morph: $('#morph'), morphVal: $('#morphVal'), fade: $('#fade'), fadeWrap: $('#fadeWrap'),
@@ -78,9 +78,10 @@ async function ensureAvatar() {
     const A = AV();
     A.onDirty = markDirty; A.onHistory = updateHistoryButtons; A.onStatus = setStatus;
     A.onPins = focus => { if (is3d()) { renderPinList(); if (focus) focusPin(A.selectedPin); } };
-    A.onModel = () => { renderModelPanel(); renderRoleSelects(); updateBrushLabel(); renderGen3d(); };
+    A.onModel = () => { renderModelPanel(); renderRoleSelects(); updateBrushLabel(); renderGen3d(); renderPanelTags3d(); };
     A.onMeasure = () => renderMeasures();
     A.onLandmarks = () => { renderApLandmarks(); renderLmPrompt(); };
+    A.onPanels = renderPanelTags3d;
     A.init(el.stage);
     A.brush = +el.brush3d.value / 100; A.strength = state.strength / 100; A.symmetry = el.symmetry.checked; A.setGrid(state.grid);
     renderModelPanel(); renderMeasures(); updateBrushLabel();
@@ -112,7 +113,7 @@ function createView(name, image) {
     src: bctx.getImageData(0, 0, W, H).data,
     out: actx.getImageData(0, 0, W, H),
     dx: new Float32Array(W * H), dy: new Float32Array(W * H),
-    pins: [], history: [], redo: [], preStroke: null, strokeBox: null,
+    pins: [], history: [], redo: [], preStroke: null, strokeBox: null, surgeon: null,
     landmarks: null, kind: '', mm: 0,
   };
 }
@@ -295,7 +296,7 @@ function mirrorComposites(v, src) {
     return c; };
   return [make(true), make(false)];
 }
-function contentSize(v) { return (state.compare === 'side' || state.compare === 'mirror') ? { w: v.W * 2 + sideGap(v), h: v.H } : { w: v.W, h: v.H }; }
+function contentSize(v) { return state.compare === 'mirror' || (state.compare === 'side' && v.surgeon) ? { w: v.W * 3 + sideGap(v) * 2, h: v.H } : state.compare === 'side' ? { w: v.W * 2 + sideGap(v), h: v.H } : { w: v.W, h: v.H }; }
 
 function resizeCanvas() {
   const r = el.stage.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
@@ -328,6 +329,7 @@ function draw() {
   ctx.clearRect(0, 0, cw, ch);
   const v = currentView();
   el.divider.hidden = !v || state.compare !== 'slider' || state.showBefore;
+  el.divider2.hidden = el.divider.hidden || !v.surgeon;
   el.zoomVal.textContent = Math.round(state.zoom * 100) + '%';
   if (!v) return;
 
@@ -337,7 +339,12 @@ function draw() {
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
   let mode = state.showBefore ? 'before' : state.compare;
   const labels = [];
-  if (state.showBefore && state.compare === 'mirror') { const [ll, rr] = mirrorComposites(v, v.before); ctx.drawImage(ll, 0, 0); ctx.drawImage(rr, W + sideGap(v), 0); labels.push(['Original left–left', 0, 'left'], ['Original right–right', W + sideGap(v), 'left']); mode = 'mirror-before'; }
+  if (state.showBefore && state.compare === 'mirror') {
+    // Three panels: the patient's actual photo, then the left–left and right–right composites.
+    const [ll, rr] = mirrorComposites(v, v.before), g = sideGap(v);
+    ctx.drawImage(v.before, 0, 0); ctx.drawImage(ll, W + g, 0); ctx.drawImage(rr, (W + g) * 2, 0);
+    labels.push(['Original (actual)', 0, 'left'], ['Original left–left', W + g, 'left'], ['Original right–right', (W + g) * 2, 'left']); mode = 'mirror-before';
+  }
   const beforeImg = v.refCanvas || v.before, beforeLabel = v.refCanvas ? (state.referenceVersion ? state.referenceVersion.name : 'Reference') : 'Before';
   if (mode === 'before') { ctx.drawImage(beforeImg, 0, 0); labels.push([v.refCanvas ? beforeLabel : 'Original', 0, 'left']); }
   else if (mode === 'after') { ctx.drawImage(v.after, 0, 0); labels.push(['Simulated', W, 'right']); }
@@ -348,18 +355,27 @@ function draw() {
   } else if (mode === 'side') {
     ctx.drawImage(beforeImg, 0, 0);
     ctx.drawImage(v.after, W + sideGap(v), 0);
-    labels.push([beforeLabel, 0, 'left'], ['Simulated after', W + sideGap(v), 'left']);
+    labels.push([beforeLabel, 0, 'left'], [v.surgeon ? 'Simulated (platform)' : 'Simulated after', W + sideGap(v), 'left']);
+    if (v.surgeon) { ctx.drawImage(v.surgeon.canvas, (W + sideGap(v)) * 2, 0); labels.push(['Surgeon\'s simulation', (W + sideGap(v)) * 2, 'left']); }
   } else if (mode === 'mirror') {
-    const [ll, rr] = mirrorComposites(v, v.after);
-    ctx.drawImage(ll, 0, 0); ctx.drawImage(rr, W + sideGap(v), 0);
-    labels.push(['Left–left composite', 0, 'left'], ['Right–right composite', W + sideGap(v), 'left']);
+    // Three panels: the simulated face as it is, then the left–left and right–right composites.
+    const [ll, rr] = mirrorComposites(v, v.after), g = sideGap(v);
+    ctx.drawImage(v.after, 0, 0); ctx.drawImage(ll, W + g, 0); ctx.drawImage(rr, (W + g) * 2, 0);
+    labels.push(['Simulated (actual)', 0, 'left'], ['Left–left composite', W + g, 'left'], ['Right–right composite', (W + g) * 2, 'left']);
+  } else if (v.surgeon) {
+    // Three-way slider: original | platform simulation | surgeon's own simulation
+    const s1 = Math.min(state.divider, state.divider2) * W, s2 = Math.max(state.divider, state.divider2) * W;
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, s1, H); ctx.clip(); ctx.drawImage(beforeImg, 0, 0); ctx.restore();
+    ctx.save(); ctx.beginPath(); ctx.rect(s1, 0, s2 - s1, H); ctx.clip(); ctx.drawImage(v.after, 0, 0); ctx.restore();
+    ctx.save(); ctx.beginPath(); ctx.rect(s2, 0, W - s2, H); ctx.clip(); ctx.drawImage(v.surgeon.canvas, 0, 0); ctx.restore();
+    labels.push([beforeLabel, 0, 'left'], ['Simulated (platform)', s1, 'left'], ['Surgeon\'s simulation', W, 'right']);
   } else {
     const sx = state.divider * W;
     ctx.save(); ctx.beginPath(); ctx.rect(0, 0, sx, H); ctx.clip(); ctx.drawImage(beforeImg, 0, 0); ctx.restore();
     ctx.save(); ctx.beginPath(); ctx.rect(sx, 0, W - sx, H); ctx.clip(); ctx.drawImage(v.after, 0, 0); ctx.restore();
     labels.push([beforeLabel, 0, 'left'], ['Simulated', W, 'right']);
   }
-  if (state.grid) { drawGrid(v, 0); if (mode === 'side' || mode === 'mirror') drawGrid(v, W + sideGap(v)); }
+  if (state.grid) { drawGrid(v, 0); if (mode === 'side' || mode === 'mirror' || mode === 'mirror-before') drawGrid(v, W + sideGap(v)); if (mode === 'mirror' || mode === 'mirror-before' || (mode === 'side' && v.surgeon)) drawGrid(v, (W + sideGap(v)) * 2); }
   if (!state.showBefore) { drawPins(v); if (state.tool === 'landmarks' && v.landmarks) drawLandmarks(v); }
   ctx.restore();
 
@@ -376,6 +392,7 @@ function draw() {
 
   // Divider handle
   if (!el.divider.hidden) el.divider.style.left = (panX + state.divider * W * zoom) + 'px';
+  if (!el.divider2.hidden) el.divider2.style.left = (panX + state.divider2 * W * zoom) + 'px';
 
   // Brush cursor
   if (hover && isPaintTool() && !stroke) drawBrushCursor(v);
@@ -540,15 +557,44 @@ el.canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 // Comparison slider handle
 let divDrag = false;
-el.divider.addEventListener('pointerdown', e => { divDrag = true; el.divider.setPointerCapture(e.pointerId); e.preventDefault(); });
-el.divider.addEventListener('pointermove', e => {
-  const v = currentView(); if (!divDrag || !v) return;
-  const r = el.canvas.getBoundingClientRect();
-  state.divider = clamp(((e.clientX - r.left) - state.panX) / state.zoom / v.W, 0, 1);
-  draw();
+for (const [handle, key] of [[el.divider, 'divider'], [el.divider2, 'divider2']]) {
+  handle.addEventListener('pointerdown', e => { divDrag = true; handle.setPointerCapture(e.pointerId); e.preventDefault(); });
+  handle.addEventListener('pointermove', e => {
+    const v = currentView(); if (!divDrag || !v) return;
+    const r = el.canvas.getBoundingClientRect();
+    let x = clamp(((e.clientX - r.left) - state.panX) / state.zoom / v.W, 0, 1);
+    if (v.surgeon) x = key === 'divider' ? Math.min(x, state.divider2) : Math.max(x, state.divider);   // keep original | platform | surgeon in order
+    state[key] = x;
+    draw();
+  });
+  handle.addEventListener('pointerup', () => { divDrag = false; });
+  handle.addEventListener('pointercancel', () => { divDrag = false; });
+}
+
+/* ── Surgeon's own simulation (e.g. Photoshop) as a third image ── */
+function renderSurgeonBar() {
+  const v = currentView(), has = !!(v && v.surgeon);
+  $('#surgeonWrap').hidden = !v;
+  $('#btnSurgeonImg').textContent = has ? 'Replace surgeon\'s image' : '+ Surgeon\'s image';
+  $('#surgeonName').hidden = !has; $('#surgeonName').textContent = has ? v.surgeon.name : '';
+  $('#btnSurgeonRemove').hidden = !has;
+}
+function setSurgeonImage(v, img, name) {
+  const c = document.createElement('canvas'); c.width = v.W; c.height = v.H; const k = c.getContext('2d');
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height, sc = Math.min(v.W / iw, v.H / ih);
+  k.fillStyle = '#262b33'; k.fillRect(0, 0, v.W, v.H);
+  k.drawImage(img, (v.W - iw * sc) / 2, (v.H - ih * sc) / 2, iw * sc, ih * sc);
+  v.surgeon = { canvas: c, name };
+  state.divider = 0.34; state.divider2 = 0.67;                                 // show all three at once
+  renderSurgeonBar(); fit(); markDirty();
+}
+$('#btnSurgeonImg').addEventListener('click', () => { if (!currentView()) return alert('Add the patient\'s photo first.'); el.fileSurgeon.click(); });
+el.fileSurgeon.addEventListener('change', async () => {
+  const f = el.fileSurgeon.files[0]; el.fileSurgeon.value = ''; const v = currentView(); if (!f || !v) return;
+  try { const img = await loadImageFile(f); setSurgeonImage(v, img, f.name); if (img.close) img.close(); setStatus(`Surgeon's image added to “${v.name}” — compare all three with the slider or side by side`); }
+  catch (err) { alert(err.message); }
 });
-el.divider.addEventListener('pointerup', () => { divDrag = false; });
-el.divider.addEventListener('pointercancel', () => { divDrag = false; });
+$('#btnSurgeonRemove').addEventListener('click', () => { const v = currentView(); if (!v || !v.surgeon) return; v.surgeon = null; renderSurgeonBar(); fit(); markDirty(); });
 
 /* ───────────────────────── Tools & controls ───────────────────────── */
 function setTool(t) {
@@ -712,6 +758,7 @@ function renderTabs() {
   add.addEventListener('click', () => el.filePhotos.click());
   el.viewTabs.appendChild(add);
   el.empty.style.display = state.views.length ? 'none' : '';
+  renderSurgeonBar();
   renderRoleSelects();
 }
 /* ── 3D avatar photo roles ── */
@@ -753,7 +800,7 @@ function selectView(i) {
   state.current = i; state.selectedPin = -1;
   const v = currentView();
   if (v) { setMorph(1, false); renderAll(v); if (state.grid && !v.landmarks) ensureLandmarks(v); }
-  renderTabs(); renderPinList(); updateHistoryButtons(); fit(); renderApLandmarks();
+  renderTabs(); renderPinList(); updateHistoryButtons(); fit(); renderApLandmarks(); renderSurgeonBar();
 }
 function removeView(i) {
   const v = state.views[i];
@@ -796,6 +843,7 @@ async function addPhotos(files) {
   renderTabs(); renderPinList(); updateHistoryButtons(); fit(); markDirty(); renderApLandmarks(); renderGen3d();
   setStatus(`${list.length} photo${list.length > 1 ? 's' : ''} added`);
   if (avatarInited) autoAssignRoles();
+  for (const v of state.views.slice(-list.length)) autoLandmarksPhoto(v);
 }
 el.filePhotos.addEventListener('change', () => { addPhotos(el.filePhotos.files); el.filePhotos.value = ''; });
 $('#btnAddFirst').addEventListener('click', () => el.filePhotos.click());
@@ -918,8 +966,9 @@ function renderApLandmarks() {
   const rows = [];
   if (avatarInited && AV().model) {
     const A = AV(), ready = A.landmarksReady();
-    rows.push(`<div class="lmrow"><span>3D model:</span> <span class="${ready ? 'ok' : 'todo'}">${ready ? 'landmarks set' : 'landmarks needed'}</span>
-      <button id="apLm3d">${ready ? 'Check / adjust landmarks' : 'Set landmarks'}</button>
+    rows.push(`<div class="lmrow"><span>3D model:</span> <span class="${ready ? 'ok' : 'todo'}">${ready ? (A.lmSource || 'landmarks located automatically') : 'landmarks needed'}</span>
+      <button id="apLmAuto3d" title="Run the face detector on the model again">Re-detect</button>
+      <button id="apLm3d" title="Move a landmark by hand if one is off">Adjust</button>
       <label class="check inline"><input type="checkbox" id="apShowLm" ${A.showLandmarks ? 'checked' : ''}> show</label></div>`);
   }
   const v = currentView();
@@ -927,14 +976,17 @@ function renderApLandmarks() {
     const kind = viewKind(v), has = !!v.landmarks;
     rows.push(`<div class="lmrow"><span>Photo “${esc(v.name)}”:</span>
       <select id="apKind"><option value="front" ${kind === 'front' ? 'selected' : ''}>front view</option><option value="profile" ${kind === 'profile' ? 'selected' : ''}>profile view</option><option value="other" ${kind === 'other' ? 'selected' : ''}>other (not editable by AI)</option></select>
-      <span class="${has ? 'ok' : 'todo'}">${has ? 'landmarks set' : 'landmarks needed'}</span>
-      <button id="apLm2d">${has ? 'Adjust landmarks' : 'Place landmarks'}</button>
+      <span class="${v.lmStatus === 'auto' ? 'ok' : v.lmStatus === 'detecting' ? '' : 'todo'}">${v.lmStatus === 'detecting' ? 'detecting face…' : has ? (v.lmSource || 'landmarks set') : 'landmarks needed'}</span>
+      <button id="apLmAuto2d" title="Run the face detector on this photo again">Re-detect</button>
+      <button id="apLm2d" title="Move a landmark by hand if one is off">Adjust</button>
       ${kind === 'other' ? '' : `<label class="inline">${kind === 'front' ? 'pupil distance' : 'nasion–chin'} <input type="number" id="apMm" min="20" max="200" value="${v.mm || (kind === 'front' ? 63 : 108)}"> mm</label>`}
       ${has ? `<button id="apLmReset" title="Put the landmarks back on the template">Reset</button>` : ''}</div>`);
   }
   if (!rows.length) rows.push('<div class="lmrow">Add a photo or a 3D model, then place the landmarks so the autopilot knows where the nose, lips and chin are.</div>');
   box.innerHTML = rows.join('');
-  $('#apLm3d')?.addEventListener('click', async () => { const A = await ensureAvatar(); if (!is3d()) await setMode('3d'); setTool3d('landmark'); A.startLandmarks(); });
+  $('#apLm3d')?.addEventListener('click', async () => { const A = await ensureAvatar(); if (!is3d()) await setMode('3d'); A.setShowLandmarks(true); setTool3d('landmark'); A.finishLandmarks(); renderApLandmarks(); });
+  $('#apLmAuto3d')?.addEventListener('click', () => autoLandmarks3d());
+  $('#apLmAuto2d')?.addEventListener('click', () => { const vv = currentView(); if (vv) autoLandmarksPhoto(vv); });
   $('#apShowLm')?.addEventListener('change', e => { AV().setShowLandmarks(e.target.checked); });
   $('#apKind')?.addEventListener('change', e => { const vv = currentView(); vv.kind = e.target.value; vv.landmarks = null; vv.mm = 0; markDirty(); renderApLandmarks(); draw(); });
   $('#apLm2d')?.addEventListener('click', async () => { if (is3d()) await setMode('2d'); setTool('landmarks'); });
@@ -982,11 +1034,12 @@ function renderAiBanner() {
   else { b.className = 'ap-banner'; b.innerHTML = `<span>${esc(aiHealth.claude.message || 'AI not connected.')} Without it the autopilot uses a basic phrase parser.</span><button id="apConnect">Connect Claude</button>`; }
   $('#apConnect').addEventListener('click', openAiSettings);
 }
-function openAiSettings() {
+function openAiSettings(focus, note) {
   $('#aiClaudeKey').value = aiKeys.claude || ''; $('#aiMeshyKey').value = aiKeys.meshy || '';
+  const n = $('#aiNote'); if (n) { n.hidden = !note; n.textContent = note || ''; }
   $('#aiClaudeStatus').textContent = aiHealth ? aiHealth.claude.message : ''; $('#aiClaudeStatus').className = 'ai-status' + (aiHealth && aiHealth.claude.ok ? ' ok' : '');
   $('#aiMeshyStatus').textContent = aiHealth ? aiHealth.meshy.message : ''; $('#aiMeshyStatus').className = 'ai-status' + (aiHealth && aiHealth.meshy.ok ? ' ok' : '');
-  $('#aiModal').hidden = false; $('#aiClaudeKey').focus();
+  $('#aiModal').hidden = false; (focus === 'meshy' ? $('#aiMeshyKey') : $('#aiClaudeKey')).focus();
 }
 $('#btnAI').addEventListener('click', openAiSettings);
 $('#aiClose').addEventListener('click', () => { $('#aiModal').hidden = true; });
@@ -1008,6 +1061,55 @@ $('#aiTest').addEventListener('click', async () => {
 window.MorphAPI.apiFetch = apiFetch;
 window.MorphAPI.aiReady = () => !!(aiHealth && aiHealth.claude && aiHealth.claude.ok);
 setTimeout(checkAiHealth, 800);
+
+/* ───────────────────────── Automatic facial landmarks ───────────────────────── */
+const faceReady = new Promise(res => { if (window.FaceDetect) res(); else window.addEventListener('facedetect-ready', res, { once: true }); });
+/* Detect on a photo: local face model first; Claude vision for profiles when connected; template otherwise. */
+async function autoLandmarksPhoto(v, opts = {}) {
+  v.lmStatus = 'detecting'; renderApLandmarks();
+  try {
+    await faceReady;
+    const r = await window.FaceDetect.detectFace(v.before);
+    if (r && window.FaceDetect.isFrontal(r)) {
+      v.landmarks = r.landmarks; v.kind = 'front'; v.mm = v.mm || 63; v.lmStatus = 'auto'; v.lmSource = `face detected (${Math.round(r.score * 100)}%)`;
+      if (r.yaw && Math.abs(r.yaw) > 0.08) v.lmSource += ', slightly turned';
+      markDirty(); renderApLandmarks(); draw(); return true;
+    }
+    // Not frontal (or nothing found): treat as profile and ask Claude vision if available.
+    if (viewKind(v) !== 'front' || !r) {
+      const ai = await claudeLandmarks(v);
+      if (ai) { v.landmarks = ai.landmarks; v.kind = ai.kind; v.mm = v.mm || (ai.kind === 'front' ? 63 : 108); v.lmStatus = 'auto'; v.lmSource = `AI vision (${ai.confidence})`; markDirty(); renderApLandmarks(); draw(); return true; }
+    }
+    if (r) { v.landmarks = r.landmarks; v.kind = 'front'; v.mm = v.mm || 63; v.lmStatus = 'auto'; v.lmSource = 'face detected (turned head)'; markDirty(); renderApLandmarks(); draw(); return true; }
+  } catch (e) { console.warn('landmark detection failed', e); }
+  // Fallback: template that the surgeon can adjust.
+  if (!v.landmarks) ensureLandmarks(v);
+  v.lmStatus = 'template'; v.lmSource = viewKind(v) === 'profile' ? 'profile photo: connect Claude in AI settings for automatic detection, or adjust the template' : 'no face detected: adjust the template';
+  markDirty(); renderApLandmarks(); draw(); return false;
+}
+async function claudeLandmarks(v) {
+  if (!(window.MorphAPI.aiReady && window.MorphAPI.aiReady())) return null;
+  try {
+    const small = document.createElement('canvas'); const sc = Math.min(1, 1024 / Math.max(v.W, v.H)); small.width = Math.round(v.W * sc); small.height = Math.round(v.H * sc);
+    small.getContext('2d').drawImage(v.before, 0, 0, small.width, small.height);
+    const r = await apiFetch('api/landmarks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ image: small.toDataURL('image/jpeg', 0.85), hint: viewKind(v) }) });
+    if (!r.ok) return null;
+    const b = await r.json(); const lm = {};
+    for (const [k, q] of Object.entries(b.landmarks || {})) lm[k] = { x: q.x * v.W, y: q.y * v.H };
+    const need = /profile/.test(b.view) ? ['nasion', 'pronasale', 'subnasale', 'pogonion'] : ['pupil_l', 'pupil_r', 'nasion', 'pronasale', 'subnasale', 'pogonion'];
+    if (!need.every(k => lm[k])) return null;
+    return { landmarks: lm, kind: /profile/.test(b.view) ? 'profile' : 'front', confidence: b.confidence || 'medium' };
+  } catch { return null; }
+}
+async function autoLandmarks3d() {
+  const A = await ensureAvatar(); if (!A.model) return false;
+  await faceReady;
+  const res = await A.autoLandmarks((canvas, opts) => window.FaceDetect.detectFace(canvas, opts));
+  A.lmSource = res.ok ? `face detected on the model (${res.found}/7)` : `automatic detection failed (${res.reason}); using the estimate`;
+  renderApLandmarks();
+  return res.ok;
+}
+window.MorphAPI.autoLandmarksPhoto = autoLandmarksPhoto;
 
 /* ───────────────────────── Versions ("Morph 1", "Morph 2"…) ───────────────────────── */
 function renderWithDisp(v, dx, dy) {
@@ -1120,6 +1222,13 @@ el.fileNotes.addEventListener('change', async () => {
 });
 
 /* ───────────────────────── 3D empty state (no patient model yet) ───────────────────────── */
+/* Labels over the 3D panels (side by side, or the three mirror panels). */
+function renderPanelTags3d() {
+  const box = $('#panelTags3d'); if (!box) return;
+  const labels = avatarInited && is3d() ? AV().panelLabels() : [];
+  box.hidden = !labels.length;
+  box.innerHTML = labels.map(l => `<span><b>${l}</b></span>`).join('');
+}
 function renderGen3d() {
   if (!is3d()) { el.gen3d.hidden = true; return; }
   const A = avatarInited ? AV() : null;
@@ -1128,7 +1237,8 @@ function renderGen3d() {
   el.gen3d.hidden = !show;
   if (A) A.hideModel = show;
   const front = state.views.find(v => viewKind(v) === 'front') || state.views[0];
-  el.gen3dHint.textContent = front ? `Front photo to use: “${front.name}”. Generation takes 1–3 minutes; the photo is sent to the AI 3D service only when you press the button.` : 'Add the patient\'s front photo first (Photo morph tab or “+ Add photo”).';
+  const profiles = state.views.filter(v => v !== front && viewKind(v) === 'profile');
+  el.gen3dHint.textContent = front ? `Front photo: “${front.name}”${profiles.length ? ` + ${profiles.length} profile photo${profiles.length > 1 ? 's' : ''}` : ''}. ${profiles.length ? 'Generation takes 1–3 minutes.' : 'For a more accurate model, add the left and right profile photos before generating (optional). Generation takes 1–3 minutes.'}` : 'Add the patient\'s front photo first (Photo morph tab or “+ Add photo”).';
   $('#gen3dGo').disabled = !front;
 }
 $('#gen3dGo').addEventListener('click', () => generateModel());
@@ -1242,7 +1352,7 @@ function serialize() {
     app: 'morph-studio', version: 1, savedAt: new Date().toISOString(),
     patient: { ...state.patient }, notes: { ...state.notes },
     docs: state.docs.map(d => ({ ...d })),
-    views: state.views.map(v => ({ name: v.name, W: v.W, H: v.H, image: v.before.toDataURL('image/jpeg', 0.92), disp: encodeDisp(v), pins: v.pins.map(p => ({ ...p })), landmarks: v.landmarks ? JSON.parse(JSON.stringify(v.landmarks)) : null, kind: v.kind || '', mm: v.mm || 0 })),
+    views: state.views.map(v => ({ name: v.name, W: v.W, H: v.H, image: v.before.toDataURL('image/jpeg', 0.92), disp: encodeDisp(v), pins: v.pins.map(p => ({ ...p })), landmarks: v.landmarks ? JSON.parse(JSON.stringify(v.landmarks)) : null, kind: v.kind || '', mm: v.mm || 0, lmStatus: v.lmStatus || '', lmSource: v.lmSource || '', surgeon: v.surgeon ? { name: v.surgeon.name, image: v.surgeon.canvas.toDataURL('image/jpeg', 0.92) } : null })),
     chat: state.chat || [],
     versions: serializeVersions(), usePlaceholder: !!state.usePlaceholder,
     avatar: avatarInited ? AV().serialize(v => state.views.indexOf(v)) : (pendingAvatar || null),
@@ -1262,7 +1372,8 @@ async function restore(data) {
     decodeDisp(v, d.disp);
     v.pins = (d.pins || []).map(p => ({ x: +p.x || 0, y: +p.y || 0, text: String(p.text || '') }));
     if (d.landmarks && typeof d.landmarks === 'object') { v.landmarks = {}; for (const [k, q] of Object.entries(d.landmarks)) if (LM_NAMES.includes(k) && q && isFinite(q.x) && isFinite(q.y)) v.landmarks[k] = { x: +q.x, y: +q.y }; if (!Object.keys(v.landmarks).length) v.landmarks = null; }
-    v.kind = ['front', 'profile', 'other'].includes(d.kind) ? d.kind : ''; v.mm = +d.mm || 0;
+    v.kind = ['front', 'profile', 'other'].includes(d.kind) ? d.kind : ''; v.mm = +d.mm || 0; v.lmStatus = d.lmStatus || (v.landmarks ? 'auto' : ''); v.lmSource = d.lmSource || '';
+    if (d.surgeon && typeof d.surgeon.image === 'string' && d.surgeon.image.startsWith('data:')) { try { const si = await loadDataUrl(d.surgeon.image); const c = document.createElement('canvas'); c.width = v.W; c.height = v.H; c.getContext('2d').drawImage(si, 0, 0, v.W, v.H); v.surgeon = { canvas: c, name: String(d.surgeon.name || 'Surgeon\'s image') }; } catch { /* skip a broken image */ } }
     renderAll(v);
     state.views.push(v);
   }
@@ -1366,16 +1477,16 @@ $('#btnExport').addEventListener('click', () => {
   }
   const v = currentView(); if (!v) return alert('Add a photo first.');
   if (state.morph < 1) { setMorph(1, true); draw(); }
-  let b = v.before, a = v.after;
-  if (state.grid) { const withGrid = src => { const c = document.createElement('canvas'); c.width = v.W; c.height = v.H; const k = c.getContext('2d'); k.drawImage(src, 0, 0); drawGrid(v, 0, k, 1); return c; }; b = withGrid(v.before); a = withGrid(v.after); }
-  composeSheet(b, a, v.name, `morph_${fileStem()}_${v.name.replace(/[^\w-]+/g, '_')}.png`);
+  let b = v.before, a = v.after, sg = v.surgeon ? v.surgeon.canvas : null;
+  if (state.grid) { const withGrid = src => { const c = document.createElement('canvas'); c.width = v.W; c.height = v.H; const k = c.getContext('2d'); k.drawImage(src, 0, 0); drawGrid(v, 0, k, 1); return c; }; b = withGrid(v.before); a = withGrid(v.after); if (sg) sg = withGrid(sg); }
+  composeSheet(b, a, v.name, `morph_${fileStem()}_${v.name.replace(/[^\w-]+/g, '_')}.png`, sg);
   setStatus('Before / after image downloaded');
 });
-function composeSheet(beforeImg, afterImg, label, filename) {
-  const W = beforeImg.width, H = beforeImg.height, gap = Math.round(W * 0.03), pad = Math.round(W * 0.04);
+function composeSheet(beforeImg, afterImg, label, filename, surgeonImg = null) {
+  const W = beforeImg.width, H = beforeImg.height, gap = Math.round(W * 0.03), pad = Math.round(W * 0.04), cols = surgeonImg ? 3 : 2;
   const fs = Math.max(14, Math.round(W * 0.026)), small = Math.round(fs * 0.8), font = getComputedStyle(document.body).fontFamily;
   const c = document.createElement('canvas'), g = c.getContext('2d');
-  c.width = W * 2 + gap + pad * 2;
+  c.width = W * cols + gap * (cols - 1) + pad * 2;
   const innerW = c.width - pad * 2;
   g.font = `${small}px ${font}`;
   const discLines = wrapText(g, state.notes.disclaimer, innerW);
@@ -1391,10 +1502,11 @@ function composeSheet(beforeImg, afterImg, label, filename) {
   const imgY = headerH + fs * 1.6;
   g.font = `600 ${small}px ${font}`; g.fillStyle = '#16212e';
   g.fillText('BEFORE', pad, imgY - fs * 1.3);
-  g.fillText('SIMULATED AFTER', pad + W + gap, imgY - fs * 1.3);
+  g.fillText(surgeonImg ? 'SIMULATED (PLATFORM)' : 'SIMULATED AFTER', pad + W + gap, imgY - fs * 1.3);
   g.drawImage(beforeImg, pad, imgY); g.drawImage(afterImg, pad + W + gap, imgY);
   g.strokeStyle = '#dde3ea'; g.lineWidth = 1;
   g.strokeRect(pad + 0.5, imgY + 0.5, W - 1, H - 1); g.strokeRect(pad + W + gap + 0.5, imgY + 0.5, W - 1, H - 1);
+  if (surgeonImg) { g.fillStyle = '#16212e'; g.font = `600 ${small}px ${font}`; g.fillText("SURGEON'S SIMULATION", pad + (W + gap) * 2, imgY - fs * 1.3); g.drawImage(surgeonImg, pad + (W + gap) * 2, imgY, W, H); g.strokeRect(pad + (W + gap) * 2 + 0.5, imgY + 0.5, W - 1, H - 1); }
   g.font = `${small}px ${font}`; g.fillStyle = '#5b6876';
   discLines.forEach((l, i) => g.fillText(l, pad, imgY + H + pad * 0.7 + i * Math.round(small * 1.35)));
   c.toBlob(b => download(filename, b), 'image/png');
@@ -1411,7 +1523,7 @@ $('#btnPrint').addEventListener('click', () => {
   for (const v of state.views) {
     html += `<section class="print-view"><h2>${esc(v.name)}</h2><div class="pair">
       <figure><img src="${v.before.toDataURL('image/jpeg', 0.9)}" alt="Before"><figcaption>Before</figcaption></figure>
-      <figure><img src="${v.after.toDataURL('image/jpeg', 0.9)}" alt="Simulated after"><figcaption>Simulated after</figcaption></figure></div>`;
+      <figure><img src="${v.after.toDataURL('image/jpeg', 0.9)}" alt="Simulated after"><figcaption>${v.surgeon ? 'Simulated (platform)' : 'Simulated after'}</figcaption></figure>${v.surgeon ? `<figure><img src="${v.surgeon.canvas.toDataURL('image/jpeg', 0.9)}" alt="Surgeon's simulation"><figcaption>Surgeon's simulation (${esc(v.surgeon.name)})</figcaption></figure>` : ''}</div>`;
     if (v.pins.length) html += `<ol>${v.pins.map(p => `<li>${esc(p.text) || '<em>(no text)</em>'}</li>`).join('')}</ol>`;
     html += '</section>';
   }
@@ -1505,7 +1617,9 @@ async function loadModelFile(file) {
     await A.loadGLB(await file.arrayBuffer(), file.name);
     if (!is3d()) await setMode('3d');
     A.resetView();
-    setStatus(`3D model loaded: ${file.name}. Use Measure + "Set as…" to calibrate the scale.`);
+    setStatus(`3D model loaded: ${file.name} — locating the facial landmarks…`);
+    await autoLandmarks3d();
+    setStatus(`3D model loaded: ${file.name}. Use Measure + "Set as…" to calibrate the scale if needed.`);
   } catch (e) { alert('Could not load this 3D model: ' + (e.message || e)); setStatus('Model not loaded'); }
 }
 $('#btnLoadModel').addEventListener('click', () => el.fileModel.click());
@@ -1527,19 +1641,20 @@ async function postJSON(url, data) {
 async function generateModel() {
   const A0 = avatarInited ? AV() : null;
   let view = (A0 && A0.photos.front && state.views.includes(A0.photos.front)) ? A0.photos.front : state.views.find(v => viewKind(v) === 'front') || (currentView() && viewKind(currentView()) !== 'profile' ? currentView() : null);
-  if (!view) { alert('Add a front-view photo of the patient first (plain background, neutral expression, hair away from the face).'); return; }
-  if (!confirm(`Build a 3D model of the patient from the photo “${view.name}”?\n\nThe photo is sent to the AI 3D service (Meshy) to generate the model and is not kept in this app's servers. Make sure the patient has consented to this. Generation usually takes 1–3 minutes.`)) return;
-  genUI(true, 3, 'Sending photo…');
-  const image = view.before.toDataURL('image/jpeg', 0.92);
+  if (!view) { setStatus('Add a front-view photo of the patient first.'); if (el.gen3dHint) el.gen3dHint.textContent = 'Add the patient\'s front photo first (Photo morph tab or “+ Add photo”).'; return; }
+  // Front photo first, then any profile photos: more views give Meshy better geometry.
+  const profiles = state.views.filter(v => v !== view && viewKind(v) === 'profile').slice(0, 3);
+  const images = [view, ...profiles].map(v => v.before.toDataURL('image/jpeg', 0.92));
+  genUI(true, 3, profiles.length ? `Sending ${1 + profiles.length} photos…` : 'Sending photo…');
   try {
-    const start = await postJSON('api/generate3d', { action: 'start', image });
-    if (start.status === 503) { genUI(false); alert('AI 3D generation needs a Meshy API key.\n\nOpen “AI settings” (top bar) and paste a Meshy API key from meshy.ai → API, then try again. An administrator can also set MESHY_API_KEY on the server.'); openAiSettings(); return; }
+    const start = await postJSON('api/generate3d', { action: 'start', images });
+    if (start.status === 503) { genUI(false); setStatus('3D generation needs a Meshy API key — add it under AI settings.'); openAiSettings('meshy', 'Generating the patient\'s 3D model uses Meshy\'s image-to-3D service, which needs its own API key (meshy.ai → API keys). Paste it here and press Test & save, then press Generate again.'); return; }
     if (!start.ok) throw new Error((start.body && start.body.message) || `Could not start generation (${start.status}).`);
-    const taskId = start.body.task_id; genJob = { taskId, cancelled: false };
+    const taskId = start.body.task_id, multi = !!start.body.multi; genJob = { taskId, cancelled: false };
     let glbUrl = null;
     for (let i = 0; i < 400 && !genJob.cancelled; i++) {
       await sleep(i < 5 ? 3000 : 5000);
-      const st = await postJSON('api/generate3d', { action: 'status', task_id: taskId });
+      const st = await postJSON('api/generate3d', { action: 'status', task_id: taskId, multi });
       if (!st.ok) throw new Error((st.body && st.body.message) || `Status check failed (${st.status}).`);
       const b = st.body;
       if (b.status === 'failed') throw new Error(b.error || 'The AI service could not build a model from this photo.');
@@ -1552,7 +1667,7 @@ async function generateModel() {
     let buffer = null;
     try { const r = await fetch(glbUrl); if (r.ok) buffer = await r.arrayBuffer(); } catch { /* CORS or network — fall back to the proxy */ }
     if (!buffer) {
-      const r = await postJSON('api/generate3d', { action: 'fetch', task_id: taskId });
+      const r = await postJSON('api/generate3d', { action: 'fetch', task_id: taskId, multi });
       if (r.ok && r.raw) buffer = await r.raw.arrayBuffer();
       else throw new Error((r.body && r.body.error === 'too_large_for_proxy') ? 'The model file is too large to download through the app; open this link in a new tab and load the file with “Load 3D model file…”:\n' + r.body.url : 'Could not download the finished model.');
     }
@@ -1560,9 +1675,12 @@ async function generateModel() {
     await A.loadGLB(buffer, `ai-model-${(state.patient.ref || state.patient.name || 'patient').replace(/[^\w-]+/g, '_')}.glb`);
     if (!is3d()) await setMode('3d');
     A.resetView(); genUI(false); renderGen3d();
-    setStatus('AI 3D model ready — confirm the landmarks, then calibrate the scale with Measure + “Set as…”.');
-    setTool3d('landmark'); A.startLandmarks(); markDirty();
-  } catch (e) { genUI(false); alert('3D generation: ' + (e.message || e)); setStatus('3D generation failed'); }
+    setStatus('AI 3D model ready — locating the facial landmarks…');
+    const ok = await autoLandmarks3d(); markDirty();
+    const morePhotos = images.length < 2 ? ' Made from the front photo only: add the left and right profile photos and generate again for a closer likeness.' : '';
+    setStatus((ok ? 'AI 3D model ready — landmarks found automatically.' : 'AI 3D model ready — landmarks estimated; open Landmarks to check them.') + morePhotos);
+    if (morePhotos && window.Autopilot && window.Autopilot.say) window.Autopilot.say('3D model generated from the front photo only. For a better 3D simulation, add the patient\'s left and right profile photos (Photo morph tab or “+ Add photo”) and press Generate again.');
+  } catch (e) { genUI(false); setStatus('3D generation failed: ' + (e.message || e)); if (el.gen3dHint) el.gen3dHint.textContent = '3D generation failed: ' + (e.message || e); }
   finally { genJob = null; }
 }
 $('#btnGenModel').addEventListener('click', generateModel);
@@ -1608,7 +1726,7 @@ async function setMode(mode) {
     fit();
   }
   $$('#modeSeg button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
-  renderApLandmarks(); renderLmPrompt(); renderGen3d();
+  renderApLandmarks(); renderLmPrompt(); renderGen3d(); renderPanelTags3d();
   $('#btnReset').textContent = is3d() ? 'Reset avatar' : 'Reset this photo';
   setMorph(1, true); renderPinList(); renderRoleSelects(); updateHistoryButtons(); draw();
 }
@@ -1686,5 +1804,5 @@ syncFields(); renderTabs(); renderPinList(); renderDocs(); setTool('push'); setC
 })();
 
 // Small test hook (not used by the UI).
-window.__morph = { state, addPhotos, addDocs, loadModelFile, generateModel, ensureLandmarks, applyPushes2D, captureVersion, applyVersion, setReferenceVersion, extractAndApply, serialize, restore, dab, renderAll, currentView, fit, draw, setMode, ensureAvatar, openAlign };
+window.__morph = { state, addPhotos, addDocs, loadModelFile, generateModel, ensureLandmarks, autoLandmarksPhoto, autoLandmarks3d, applyPushes2D, captureVersion, applyVersion, setReferenceVersion, extractAndApply, serialize, restore, dab, renderAll, currentView, fit, draw, setMode, ensureAvatar, openAlign };
 })();

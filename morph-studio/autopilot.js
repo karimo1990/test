@@ -335,6 +335,6 @@ el.plan.addEventListener('click', () => { const n = window.MorphAPI.notes(); if 
 el.notes.addEventListener('click', () => { const n = window.MorphAPI.notes(); if (!n.consultation.trim()) { add('assistant', 'The “Consultation notes” box is empty.'); return; } handle(n.consultation, 'Consultation notes:'); });
 el.undo.addEventListener('click', () => { undoStep(); add('assistant', 'Last autopilot step undone.'); });
 
-window.Autopilot = { parseLocal, parseRelative, normaliseOp, resolve, applyOps, handle, applyDocumentText: (text, name) => handle(text, `Notes from “${name}”:`), OPS, DERIVED };
+window.Autopilot = { parseLocal, parseRelative, normaliseOp, resolve, applyOps, handle, say: text => add('assistant', text), applyDocumentText: (text, name) => handle(text, `Notes from “${name}”:`), OPS, DERIVED };
 render();
 })();

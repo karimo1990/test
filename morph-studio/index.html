@@ -50,7 +50,7 @@
       <button data-tool="annotate" title="Click on the photo to add a numbered note">
         <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.4-7-11a7 7 0 0 1 14 0c0 4.6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>Note<kbd>A</kbd>
       </button>
-      <button data-tool="landmarks" title="Drag the anatomical landmarks onto the right spots so the autopilot knows where things are">
+      <button data-tool="landmarks" title="Landmarks are found automatically; drag one only if it is off">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="6" r="2"/><circle cx="7" cy="14" r="2"/><circle cx="17" cy="14" r="2"/><circle cx="12" cy="19" r="2"/><path d="M12 8v9M8.7 13l2.3-5M15.3 13L13 8"/></svg>Landmarks<kbd>L</kbd>
       </button>
       <button data-tool="hand" title="Drag to move around the photo">
@@ -80,7 +80,7 @@
       <button data-tool="note" title="Click on the head to add a numbered note">
         <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.4-7-11a7 7 0 0 1 14 0c0 4.6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>Note<kbd>A</kbd>
       </button>
-      <button data-tool="landmark" title="Click the seven anatomical landmarks so the autopilot knows where things are">
+      <button data-tool="landmark" title="Landmarks are found automatically; use this only to nudge one by hand">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="6" r="2"/><circle cx="7" cy="14" r="2"/><circle cx="17" cy="14" r="2"/><circle cx="12" cy="19" r="2"/><path d="M12 8v9M8.7 13l2.3-5M15.3 13L13 8"/></svg>Landmarks<kbd>L</kbd>
       </button>
       <button data-tool="measure" title="Click two points on the head to measure the distance in mm (updates as you sculpt)">
@@ -128,7 +128,9 @@
     <div class="stage" id="stage">
       <canvas id="canvas"></canvas>
       <div class="divider" id="divider" hidden><span class="knob" title="Drag to compare">◀ ▶</span></div>
+      <div class="divider" id="divider2" hidden><span class="knob" title="Drag to compare with the surgeon's image">◀ ▶</span></div>
       <div class="hint3d only-3d" id="hint3d" hidden></div>
+      <div class="panel-tags only-3d" id="panelTags3d" hidden></div>
       <div class="lm-prompt" id="lmPrompt" hidden></div>
       <div class="gen3d only-3d" id="gen3d" hidden>
         <div class="card">
@@ -160,14 +162,19 @@
         <button data-compare="side">Side by side</button>
         <button data-compare="fade">Fade</button>
         <button data-compare="after">After only</button>
-        <button data-compare="mirror" title="Left–left and right–right composites of the face: the standard way to see asymmetry">Mirror</button>
+        <button data-compare="mirror" title="Three panels: the actual face, then the left–left and right–right composites — the standard way to see asymmetry">Mirror</button>
       </div>
       <div class="seg only-3d" id="compare3dSeg">
         <button data-compare="after" class="active">After only</button>
         <button data-compare="side">Side by side</button>
         <button data-compare="ghost" title="Original shape drawn as a translucent overlay on the simulated result">Ghost overlay</button>
-        <button data-compare="mirror" title="The face mirrored across its midline drawn over the model: differences between the two sides show up as the amber ghost">Mirror</button>
+        <button data-compare="mirror" title="Three panels: the actual model, then the left–left and right–right composites built by mirroring each side across the facial midline">Mirror</button>
       </div>
+      <span class="surgeon-wrap only-2d" id="surgeonWrap">
+        <button id="btnSurgeonImg" title="Add the surgeon's own simulation of this photo (e.g. made in Photoshop) as a third image: original, platform simulation and surgeon's simulation can then be compared with the slider or side by side">+ Surgeon's image</button>
+        <span class="surgeon-name" id="surgeonName" hidden></span>
+        <button id="btnSurgeonRemove" class="ghost" hidden title="Remove the surgeon's image from this photo">×</button>
+      </span>
       <label class="check" id="gridWrap" title="Facial midline, horizontal thirds, vertical fifths, nose axis and profile E-line, on both before and after"><input type="checkbox" id="gridToggle"> Symmetry grid</label>
       <span class="bar-label only-3d">View</span>
       <div class="seg only-3d" id="viewSeg">
@@ -293,6 +300,7 @@
 </main>
 
 <input type="file" id="filePhotos" accept="image/*" multiple hidden>
+<input type="file" id="fileSurgeon" accept="image/*" hidden>
 <input type="file" id="fileCase" accept=".json,application/json" hidden>
 <input type="file" id="fileModel" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden>
 <input type="file" id="fileNotes" accept=".pdf,.docx,.txt,.md,.rtf,image/*,application/pdf" hidden>
@@ -301,6 +309,7 @@
   <div class="modal-card ai-card">
     <h2>AI settings</h2>
     <p class="hint">The platform's AI (autopilot, reading notes) runs on Claude. Paste your Claude API key once; it is kept in this browser only and sent to this app's own server functions with each AI request. Get a key at <strong>console.anthropic.com</strong> → API keys.</p>
+    <p class="ai-note" id="aiNote" hidden></p>
     <label for="aiClaudeKey">Claude API key</label>
     <div class="row keyrow"><input id="aiClaudeKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…"><button id="aiShow" type="button" title="Show / hide">👁</button></div>
     <div class="ai-status" id="aiClaudeStatus"></div>
@@ -342,6 +351,7 @@
 <script src="app.js"></script>
 <script src="autopilot.js"></script>
 <script type="module" src="extract.js"></script>
+<script type="module" src="facedetect.js"></script>
 <script type="module" src="avatar.js"></script>
 </body>
 </html>
