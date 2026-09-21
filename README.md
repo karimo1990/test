@@ -207,6 +207,20 @@ two points in millimetres, calibrate against a known distance (e.g. pupil to pup
 size shown in mm, a scale bar, and measurements that update live to show the before/after
 change.
 
+**AI image simulation (the main workflow)** — *Generate AI image simulation* in the AI
+autopilot panel turns the surgeon's notes into a photorealistic before/after photo, with no
+manual editing: Claude reads the patient photo together with “Planned changes”, “Consultation
+notes”, uploaded letters and the conversation (patient feedback included), and writes a precise
+edit instruction plus the region of the face allowed to change (`api/simulate.js`, action
+`plan`); OpenAI's image model (`gpt-image-1`, high input fidelity, masked to that region) then
+paints the result (action `render`). The AI image becomes the “Simulated” side of every
+comparison (slider, side by side, fade, mirror, export, print) and is saved with the case and
+with each *Morph n* version. Feedback typed into the chat (“a bit less on the tip”) re-plans
+and re-renders; *All photos* runs it on every view. Needs a Claude key and an OpenAI key
+(AI settings, or `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` on the server; `OPENAI_IMAGE_MODEL`
+and `OPENAI_IMAGE_QUALITY` are optional overrides). The brush tools still work on the manual
+layer underneath; “Show the AI image” switches between the two.
+
 **AI autopilot** — instead of sculpting by hand, the surgeon types the change ("reduce the
 dorsal hump by 2 mm and rotate the tip up 5°"), presses *Apply planned changes* / *Apply
 consultation notes*, or relays the patient's feedback ("the tip looks too upturned — a bit
@@ -253,14 +267,15 @@ downloads a labelled before/after PNG. *Save case* downloads a `.json` file (inc
 browser (IndexedDB) so an accidental refresh loses nothing.
 
 **Connecting the AI** — click *AI settings* in the top bar and paste a Claude API key
-(console.anthropic.com → API keys); *Test & save* confirms the connection. The key is kept in
-that browser only and travels with each AI request to the app's own serverless functions,
-which never store it. A Meshy key can be added the same way for AI 3D generation. For a
-clinic-wide setup an administrator can instead set `ANTHROPIC_API_KEY` / `MESHY_API_KEY` in
-the Vercel project's environment variables; those take priority.
+(console.anthropic.com → API keys) and an OpenAI API key (platform.openai.com → API keys);
+*Test & save* confirms both connections. The keys are kept in that browser only and travel
+with each AI request to the app's own serverless functions, which never store them. A Meshy
+key can be added the same way for AI 3D generation. For a clinic-wide setup an administrator
+can instead set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `MESHY_API_KEY` in the Vercel
+project's environment variables; those take priority.
 
 **Deployment** — static files plus Vercel serverless functions in `api/` (`autopilot`,
-`extract`, `generate3d`, `health`, `landmarks`). Optional overrides: `AUTOPILOT_MODEL`, `EXTRACT_MODEL`,
+`extract`, `generate3d`, `health`, `landmarks`, `simulate`). Optional overrides: `AUTOPILOT_MODEL`, `EXTRACT_MODEL`,
 `MESHY_MODEL`, `MESHY_POLYCOUNT`. `build.sh` is the Vercel build command; it fetches this
 branch from GitHub into `public/`.
 

@@ -1,12 +1,13 @@
 // Morph Studio — checks that the AI services are reachable with the configured keys.
 import Anthropic from '@anthropic-ai/sdk';
-import { anthropicKey, meshyKey } from './_keys.js';
+import { anthropicKey, meshyKey, openaiKey } from './_keys.js';
 
 const MODEL = process.env.AUTOPILOT_MODEL || 'claude-opus-5';
+const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST' && req.method !== 'GET') { res.setHeader('Allow', 'GET, POST'); return res.status(405).json({ error: 'method_not_allowed' }); }
-  const out = { claude: { configured: false, source: 'none', ok: false, model: MODEL, message: '' }, meshy: { configured: false, source: 'none', ok: false, message: '' } };
+  const out = { claude: { configured: false, source: 'none', ok: false, model: MODEL, message: '' }, meshy: { configured: false, source: 'none', ok: false, message: '' }, openai: { configured: false, source: 'none', ok: false, model: IMAGE_MODEL, message: '' } };
   const ak = anthropicKey(req);
   out.claude.source = ak.source; out.claude.configured = !!ak.key;
   if (ak.key) {
@@ -27,5 +28,13 @@ export default async function handler(req, res) {
       out.meshy.ok = r.ok; out.meshy.message = r.ok ? 'Connected' : r.status === 401 ? 'The Meshy API key was rejected (401).' : `Meshy answered ${r.status}.`;
     } catch (err) { out.meshy.message = `Could not reach Meshy: ${String(err?.message || err).slice(0, 160)}`; }
   } else out.meshy.message = 'No Meshy API key yet (needed only for AI 3D model generation).';
+  const ok_ = openaiKey(req);
+  out.openai.source = ok_.source; out.openai.configured = !!ok_.key;
+  if (ok_.key) {
+    try {
+      const r = await fetch(`${process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'}/models/${encodeURIComponent(IMAGE_MODEL)}`, { headers: { Authorization: `Bearer ${ok_.key}` } });
+      out.openai.ok = r.ok; out.openai.message = r.ok ? `Connected — ${IMAGE_MODEL} (image simulation)` : r.status === 401 ? 'The OpenAI API key was rejected (401).' : r.status === 404 ? `Key works but ${IMAGE_MODEL} is not available to this account (organisation verification may be needed).` : `OpenAI answered ${r.status}.`;
+    } catch (err) { out.openai.message = `Could not reach OpenAI: ${String(err?.message || err).slice(0, 160)}`; }
+  } else out.openai.message = 'No OpenAI API key yet (needed for the photorealistic AI image simulation).';
   return res.status(200).json(out);
 }

@@ -40,7 +40,7 @@ const state = {
   strength: 50,
   morph: 1,
   compare: 'slider',
-  divider: 0.5, divider2: 0.66,
+  divider: 0.5, divider2: 0.66, showAi: true,
   fade: 1,
   zoom: 1, panX: 0, panY: 0,
   grid: false,
@@ -113,7 +113,7 @@ function createView(name, image) {
     src: bctx.getImageData(0, 0, W, H).data,
     out: actx.getImageData(0, 0, W, H),
     dx: new Float32Array(W * H), dy: new Float32Array(W * H),
-    pins: [], history: [], redo: [], preStroke: null, strokeBox: null, surgeon: null,
+    pins: [], history: [], redo: [], preStroke: null, strokeBox: null, surgeon: null, ai: null,
     landmarks: null, kind: '', mm: 0,
   };
 }
@@ -296,6 +296,8 @@ function mirrorComposites(v, src) {
     return c; };
   return [make(true), make(false)];
 }
+/* The simulated image shown for a view: the AI-rendered photo when there is one and it is switched on, else the warp layer. */
+const afterImg = v => (state.showAi && v.ai ? v.ai.canvas : v.after);
 function contentSize(v) { return state.compare === 'mirror' || (state.compare === 'side' && v.surgeon) ? { w: v.W * 3 + sideGap(v) * 2, h: v.H } : state.compare === 'side' ? { w: v.W * 2 + sideGap(v), h: v.H } : { w: v.W, h: v.H }; }
 
 function resizeCanvas() {
@@ -347,32 +349,32 @@ function draw() {
   }
   const beforeImg = v.refCanvas || v.before, beforeLabel = v.refCanvas ? (state.referenceVersion ? state.referenceVersion.name : 'Reference') : 'Before';
   if (mode === 'before') { ctx.drawImage(beforeImg, 0, 0); labels.push([v.refCanvas ? beforeLabel : 'Original', 0, 'left']); }
-  else if (mode === 'after') { ctx.drawImage(v.after, 0, 0); labels.push(['Simulated', W, 'right']); }
+  else if (mode === 'after') { ctx.drawImage(afterImg(v), 0, 0); labels.push(['Simulated', W, 'right']); }
   else if (mode === 'fade') {
     ctx.drawImage(beforeImg, 0, 0);
-    ctx.globalAlpha = state.fade; ctx.drawImage(v.after, 0, 0); ctx.globalAlpha = 1;
+    ctx.globalAlpha = state.fade; ctx.drawImage(afterImg(v), 0, 0); ctx.globalAlpha = 1;
     labels.push([`Simulated ${Math.round(state.fade * 100)}%`, W, 'right']);
   } else if (mode === 'side') {
     ctx.drawImage(beforeImg, 0, 0);
-    ctx.drawImage(v.after, W + sideGap(v), 0);
+    ctx.drawImage(afterImg(v), W + sideGap(v), 0);
     labels.push([beforeLabel, 0, 'left'], [v.surgeon ? 'Simulated (platform)' : 'Simulated after', W + sideGap(v), 'left']);
     if (v.surgeon) { ctx.drawImage(v.surgeon.canvas, (W + sideGap(v)) * 2, 0); labels.push(['Surgeon\'s simulation', (W + sideGap(v)) * 2, 'left']); }
   } else if (mode === 'mirror') {
     // Three panels: the simulated face as it is, then the left–left and right–right composites.
-    const [ll, rr] = mirrorComposites(v, v.after), g = sideGap(v);
-    ctx.drawImage(v.after, 0, 0); ctx.drawImage(ll, W + g, 0); ctx.drawImage(rr, (W + g) * 2, 0);
+    const [ll, rr] = mirrorComposites(v, afterImg(v)), g = sideGap(v);
+    ctx.drawImage(afterImg(v), 0, 0); ctx.drawImage(ll, W + g, 0); ctx.drawImage(rr, (W + g) * 2, 0);
     labels.push(['Simulated (actual)', 0, 'left'], ['Left–left composite', W + g, 'left'], ['Right–right composite', (W + g) * 2, 'left']);
   } else if (v.surgeon) {
     // Three-way slider: original | platform simulation | surgeon's own simulation
     const s1 = Math.min(state.divider, state.divider2) * W, s2 = Math.max(state.divider, state.divider2) * W;
     ctx.save(); ctx.beginPath(); ctx.rect(0, 0, s1, H); ctx.clip(); ctx.drawImage(beforeImg, 0, 0); ctx.restore();
-    ctx.save(); ctx.beginPath(); ctx.rect(s1, 0, s2 - s1, H); ctx.clip(); ctx.drawImage(v.after, 0, 0); ctx.restore();
+    ctx.save(); ctx.beginPath(); ctx.rect(s1, 0, s2 - s1, H); ctx.clip(); ctx.drawImage(afterImg(v), 0, 0); ctx.restore();
     ctx.save(); ctx.beginPath(); ctx.rect(s2, 0, W - s2, H); ctx.clip(); ctx.drawImage(v.surgeon.canvas, 0, 0); ctx.restore();
     labels.push([beforeLabel, 0, 'left'], ['Simulated (platform)', s1, 'left'], ['Surgeon\'s simulation', W, 'right']);
   } else {
     const sx = state.divider * W;
     ctx.save(); ctx.beginPath(); ctx.rect(0, 0, sx, H); ctx.clip(); ctx.drawImage(beforeImg, 0, 0); ctx.restore();
-    ctx.save(); ctx.beginPath(); ctx.rect(sx, 0, W - sx, H); ctx.clip(); ctx.drawImage(v.after, 0, 0); ctx.restore();
+    ctx.save(); ctx.beginPath(); ctx.rect(sx, 0, W - sx, H); ctx.clip(); ctx.drawImage(afterImg(v), 0, 0); ctx.restore();
     labels.push([beforeLabel, 0, 'left'], ['Simulated', W, 'right']);
   }
   if (state.grid) { drawGrid(v, 0); if (mode === 'side' || mode === 'mirror' || mode === 'mirror-before') drawGrid(v, W + sideGap(v)); if (mode === 'mirror' || mode === 'mirror-before' || (mode === 'side' && v.surgeon)) drawGrid(v, (W + sideGap(v)) * 2); }
@@ -471,6 +473,7 @@ function onDown(e) {
 }
 function beginStroke(v, p) {
   if (anim) return;
+  if (state.showAi && v.ai) { state.showAi = false; renderSimPanel(); setStatus('Showing the manual layer while you paint — tick “Show the AI image” to go back to the AI simulation.'); }
   if (state.morph < 1) setMorph(1, true);
   v.preStroke = { dx: v.dx.slice(), dy: v.dy.slice() };
   v.strokeBox = null;
@@ -758,7 +761,7 @@ function renderTabs() {
   add.addEventListener('click', () => el.filePhotos.click());
   el.viewTabs.appendChild(add);
   el.empty.style.display = state.views.length ? 'none' : '';
-  renderSurgeonBar();
+  renderSurgeonBar(); renderSimPanel();
   renderRoleSelects();
 }
 /* ── 3D avatar photo roles ── */
@@ -800,7 +803,7 @@ function selectView(i) {
   state.current = i; state.selectedPin = -1;
   const v = currentView();
   if (v) { setMorph(1, false); renderAll(v); if (state.grid && !v.landmarks) ensureLandmarks(v); }
-  renderTabs(); renderPinList(); updateHistoryButtons(); fit(); renderApLandmarks(); renderSurgeonBar();
+  renderTabs(); renderPinList(); updateHistoryButtons(); fit(); renderApLandmarks(); renderSurgeonBar(); renderSimPanel();
 }
 function removeView(i) {
   const v = state.views[i];
@@ -1011,18 +1014,20 @@ function renderLmPrompt() {
 /* ───────────────────────── AI keys (kept in this browser) ───────────────────────── */
 const KEYS_STORE = 'morph-studio.ai-keys';
 function loadKeys() { try { return JSON.parse(localStorage.getItem(KEYS_STORE) || '{}') || {}; } catch { return {}; } }
-function saveKeys(k) { try { if (k.claude || k.meshy) localStorage.setItem(KEYS_STORE, JSON.stringify(k)); else localStorage.removeItem(KEYS_STORE); } catch { /* storage blocked */ } }
+function saveKeys(k) { try { if (k.claude || k.meshy || k.openai) localStorage.setItem(KEYS_STORE, JSON.stringify(k)); else localStorage.removeItem(KEYS_STORE); } catch { /* storage blocked */ } }
 let aiKeys = loadKeys(), aiHealth = null;
 function apiHeaders(extra = {}) {
   const h = { ...extra };
   if (aiKeys.claude) h['x-anthropic-key'] = aiKeys.claude;
   if (aiKeys.meshy) h['x-meshy-key'] = aiKeys.meshy;
+  if (aiKeys.openai) h['x-openai-key'] = aiKeys.openai;
   return h;
 }
 function apiFetch(url, opts = {}) { return fetch(url, { ...opts, headers: apiHeaders(opts.headers || {}) }); }
 async function checkAiHealth() {
   try { const r = await apiFetch('api/health', { method: 'POST' }); aiHealth = r.ok ? await r.json() : null; }
   catch { aiHealth = null; }
+  renderSimPanel();
   renderAiBanner(); return aiHealth;
 }
 function renderAiBanner() {
@@ -1030,36 +1035,42 @@ function renderAiBanner() {
   const ok = aiHealth && aiHealth.claude && aiHealth.claude.ok;
   b.hidden = false;
   if (aiHealth === null) { b.className = 'ap-banner'; b.innerHTML = `<span>AI not connected yet — add your Claude API key so the autopilot understands notes and feedback.</span><button id="apConnect">Connect Claude</button>`; }
-  else if (ok) { b.className = 'ap-banner ok'; b.innerHTML = `<span>AI connected: ${esc(aiHealth.claude.display_name || aiHealth.claude.model)}${aiHealth.claude.source === 'server' ? ' (set on the server)' : ''}${aiHealth.meshy && aiHealth.meshy.ok ? ' · 3D generation ready' : ''}</span><button id="apConnect">AI settings</button>`; }
+  else if (ok) { b.className = 'ap-banner ok'; b.innerHTML = `<span>AI connected: ${esc(aiHealth.claude.display_name || aiHealth.claude.model)}${aiHealth.claude.source === 'server' ? ' (set on the server)' : ''}${aiHealth.openai && aiHealth.openai.ok ? ' · image simulation ready' : ' · add an OpenAI key for the photorealistic image simulation'}${aiHealth.meshy && aiHealth.meshy.ok ? ' · 3D generation ready' : ''}</span><button id="apConnect">AI settings</button>`; }
   else { b.className = 'ap-banner'; b.innerHTML = `<span>${esc(aiHealth.claude.message || 'AI not connected.')} Without it the autopilot uses a basic phrase parser.</span><button id="apConnect">Connect Claude</button>`; }
   $('#apConnect').addEventListener('click', openAiSettings);
 }
 function openAiSettings(focus, note) {
-  $('#aiClaudeKey').value = aiKeys.claude || ''; $('#aiMeshyKey').value = aiKeys.meshy || '';
+  $('#aiClaudeKey').value = aiKeys.claude || ''; $('#aiMeshyKey').value = aiKeys.meshy || ''; $('#aiOpenaiKey').value = aiKeys.openai || '';
+  $('#aiOpenaiStatus').textContent = aiHealth && aiHealth.openai ? aiHealth.openai.message : ''; $('#aiOpenaiStatus').className = 'ai-status' + (aiHealth && aiHealth.openai && aiHealth.openai.ok ? ' ok' : '');
   const n = $('#aiNote'); if (n) { n.hidden = !note; n.textContent = note || ''; }
   $('#aiClaudeStatus').textContent = aiHealth ? aiHealth.claude.message : ''; $('#aiClaudeStatus').className = 'ai-status' + (aiHealth && aiHealth.claude.ok ? ' ok' : '');
   $('#aiMeshyStatus').textContent = aiHealth ? aiHealth.meshy.message : ''; $('#aiMeshyStatus').className = 'ai-status' + (aiHealth && aiHealth.meshy.ok ? ' ok' : '');
-  $('#aiModal').hidden = false; (focus === 'meshy' ? $('#aiMeshyKey') : $('#aiClaudeKey')).focus();
+  $('#aiModal').hidden = false; (focus === 'meshy' ? $('#aiMeshyKey') : focus === 'openai' ? $('#aiOpenaiKey') : $('#aiClaudeKey')).focus();
 }
 $('#btnAI').addEventListener('click', openAiSettings);
 $('#aiClose').addEventListener('click', () => { $('#aiModal').hidden = true; });
 $('#aiModal').addEventListener('click', e => { if (e.target === $('#aiModal')) $('#aiModal').hidden = true; });
 $('#aiShow').addEventListener('click', () => { const i = $('#aiClaudeKey'); i.type = i.type === 'password' ? 'text' : 'password'; });
-$('#aiRemove').addEventListener('click', () => { aiKeys = {}; saveKeys(aiKeys); $('#aiClaudeKey').value = ''; $('#aiMeshyKey').value = ''; checkAiHealth(); $('#aiClaudeStatus').textContent = 'Keys removed from this browser.'; $('#aiClaudeStatus').className = 'ai-status'; $('#aiMeshyStatus').textContent = ''; });
+$('#aiRemove').addEventListener('click', () => { aiKeys = {}; saveKeys(aiKeys); $('#aiClaudeKey').value = ''; $('#aiMeshyKey').value = ''; $('#aiOpenaiKey').value = ''; $('#aiOpenaiStatus').textContent = ''; checkAiHealth(); $('#aiClaudeStatus').textContent = 'Keys removed from this browser.'; $('#aiClaudeStatus').className = 'ai-status'; $('#aiMeshyStatus').textContent = ''; });
 $('#aiTest').addEventListener('click', async () => {
-  const claude = $('#aiClaudeKey').value.trim(), meshy = $('#aiMeshyKey').value.trim();
+  const claude = $('#aiClaudeKey').value.trim(), meshy = $('#aiMeshyKey').value.trim(), openai = $('#aiOpenaiKey').value.trim();
   if (claude && !/^sk-ant-/.test(claude)) { $('#aiClaudeStatus').textContent = 'A Claude API key starts with "sk-ant-". Please check it.'; $('#aiClaudeStatus').className = 'ai-status bad'; return; }
-  aiKeys = { claude, meshy }; saveKeys(aiKeys);
+  if (openai && (!/^sk-/.test(openai) || /^sk-ant-/.test(openai))) { $('#aiOpenaiStatus').textContent = 'An OpenAI API key starts with "sk-" (not "sk-ant-"). Please check it.'; $('#aiOpenaiStatus').className = 'ai-status bad'; return; }
+  aiKeys = { claude, meshy, openai }; saveKeys(aiKeys);
+  $('#aiOpenaiStatus').textContent = openai ? 'Testing…' : ''; $('#aiOpenaiStatus').className = 'ai-status';
   $('#aiTest').disabled = true; $('#aiClaudeStatus').textContent = 'Testing…'; $('#aiClaudeStatus').className = 'ai-status'; $('#aiMeshyStatus').textContent = meshy ? 'Testing…' : ''; $('#aiMeshyStatus').className = 'ai-status';
   const h = await checkAiHealth();
   $('#aiTest').disabled = false;
   if (!h) { $('#aiClaudeStatus').textContent = 'Could not reach the app server to test the key. Is the app running from its hosted address?'; $('#aiClaudeStatus').className = 'ai-status bad'; return; }
   $('#aiClaudeStatus').textContent = h.claude.message; $('#aiClaudeStatus').className = 'ai-status ' + (h.claude.ok ? 'ok' : h.claude.configured ? 'bad' : '');
   $('#aiMeshyStatus').textContent = h.meshy.message; $('#aiMeshyStatus').className = 'ai-status ' + (h.meshy.ok ? 'ok' : h.meshy.configured ? 'bad' : '');
+  if (h.openai) { $('#aiOpenaiStatus').textContent = h.openai.message; $('#aiOpenaiStatus').className = 'ai-status ' + (h.openai.ok ? 'ok' : h.openai.configured ? 'bad' : ''); }
+  renderSimPanel();
   if (h.claude.ok) setStatus(`AI connected: ${h.claude.display_name || h.claude.model}`);
 });
 window.MorphAPI.apiFetch = apiFetch;
 window.MorphAPI.aiReady = () => !!(aiHealth && aiHealth.claude && aiHealth.claude.ok);
+window.MorphAPI.imageAiReady = () => !!(aiHealth && aiHealth.openai && aiHealth.openai.ok);
 setTimeout(checkAiHealth, 800);
 
 /* ───────────────────────── Automatic facial landmarks ───────────────────────── */
@@ -1128,7 +1139,7 @@ function captureVersion(name, note) {
   const ver = {
     id: 'ver-' + Date.now().toString(36), name: name || `Morph ${nextVersionNumber()}`, at: new Date().toISOString(), note: note || '',
     threeD: has3d ? A.encodeState(A.captureState()) : null,
-    views: state.views.map(v => ({ disp: encodeDisp(v, 4) })),
+    views: state.views.map(v => ({ disp: encodeDisp(v, 4), ai: v.ai ? aiToJSON(v.ai, 0.85) : null })),
   };
   state.versions.push(ver); state.currentVersion = ver.id;
   renderVersions(); markDirty(); setStatus(`Saved “${ver.name}”`);
@@ -1144,7 +1155,10 @@ function applyVersion(ver) {
     const d = ver.views[i] ? ver.views[i].disp : null;
     v.history.push({ b: { x0: 0, y0: 0, x1: v.W - 1, y1: v.H - 1 }, dx: v.dx.slice(), dy: v.dy.slice() }); if (v.history.length > HISTORY_LIMIT) v.history.shift(); v.redo = [];
     const { dx, dy } = decodeDispArrays(v, d); v.dx.set(dx); v.dy.set(dy); renderAll(v);
+    const aiJ = ver.views[i] ? ver.views[i].ai : null;
+    v.ai = null; if (aiJ) aiFromJSON(v, aiJ).then(a => { v.ai = a; renderSimPanel(); draw(); });
   });
+  renderSimPanel();
   state.currentVersion = ver.id; setMorph(1, false);
   updateHistoryButtons(); renderVersions(); draw(); markDirty(); setStatus(`Showing “${ver.name}”`);
 }
@@ -1154,8 +1168,9 @@ function setReferenceVersion(ver) {
   if (A && A.model) A.setReference(ver && ver.threeD ? A.decodeState(ver.threeD) : null);
   state.views.forEach((v, i) => {
     if (!ver) { v.refCanvas = null; return; }
-    const d = ver.views[i] ? ver.views[i].disp : null;
+    const d = ver.views[i] ? ver.views[i].disp : null, aiJ = ver.views[i] ? ver.views[i].ai : null;
     const { dx, dy } = decodeDispArrays(v, d); v.refCanvas = renderWithDisp(v, dx, dy);
+    if (aiJ && state.showAi) aiFromJSON(v, aiJ).then(a => { if (state.referenceVersion === ver) { v.refCanvas = a.canvas; draw(); } });
   });
   renderVersions(); draw();
 }
@@ -1347,12 +1362,105 @@ function decodeDisp(v, d) {
     }
   }
 }
+/* ───────────────────────── AI image simulation (Claude plans, OpenAI's image model paints) ───────────────────────── */
+function aiToJSON(ai, q) { return { image: ai.canvas.toDataURL('image/jpeg', q), summary: ai.summary || '', prompt: ai.prompt || '', changes: ai.changes || [], region: ai.region || null, at: ai.at || '', model: ai.model || '' }; }
+async function aiFromJSON(v, j) {
+  const img = await loadDataUrl(j.image); const c = document.createElement('canvas'); c.width = v.W; c.height = v.H; c.getContext('2d').drawImage(img, 0, 0, v.W, v.H);
+  return { canvas: c, summary: String(j.summary || ''), prompt: String(j.prompt || ''), changes: Array.isArray(j.changes) ? j.changes : [], region: j.region || null, at: j.at || '', model: j.model || '' };
+}
+let simBusy = false;
+function renderSimPanel() {
+  const v = currentView(), box = $('#apSim'); if (!box) return;
+  const imgOk = !!(aiHealth && aiHealth.openai && aiHealth.openai.ok), claudeOk = !!(aiHealth && aiHealth.claude && aiHealth.claude.ok);
+  $('#apSimulate').disabled = simBusy || !v; $('#apSimulateAll').disabled = simBusy || state.views.length < 2;
+  $('#apShowAiWrap').hidden = !(v && v.ai); $('#apShowAi').checked = state.showAi;
+  $('#apSimHint').textContent = !claudeOk ? 'Connect Claude (AI settings) to plan the simulation from the notes.' : !imgOk ? 'Add an OpenAI API key in AI settings: it paints the photorealistic result that Claude plans from the notes.' : v && v.ai ? `AI image for “${v.name}”: ${v.ai.summary || 'ready'} (${v.ai.model || 'image model'}). Feedback typed below re-renders it.` : 'Uses “Planned changes”, “Consultation notes”, uploaded letters and the conversation below. Feedback typed below (“a bit less on the tip”) re-renders the image.';
+}
+function renderSimStatus(text, busy) { const s = $('#apSimStatus'); if (!s) return; s.hidden = !text; s.textContent = text || ''; s.className = 'ap-sim-status' + (busy ? ' busy' : ''); }
+function gatherSimNotes() {
+  const parts = [];
+  if (state.notes.plan.trim()) parts.push(`Planned changes:\n${state.notes.plan.trim()}`);
+  if (state.notes.consultation.trim()) parts.push(`Consultation notes:\n${state.notes.consultation.trim()}`);
+  for (const d of state.docs) if (d.extracted && d.extracted.trim()) parts.push(`From “${d.name}”:\n${d.extracted.trim().slice(0, 4000)}`);
+  return parts.join('\n\n');
+}
+function gatherSimFeedback(extra) {
+  const msgs = (state.chat || []).filter(m => m.role === 'user').slice(-8).map(m => m.text.replace(/^(Notes from[^\n]*|Planned changes:|Consultation notes:)\n?/, '').trim()).filter(Boolean);
+  if (extra) msgs.push(extra);
+  return msgs.map(t => `- ${t.slice(0, 600)}`).join('\n');
+}
+const SIM_SIZES = [['1024x1024', 1], ['1536x1024', 1.5], ['1024x1536', 2 / 3]];
+/* Pad the photo to one of the image model's aspect ratios (edge-blurred padding), plus a mask that frees only the region to change. */
+function padForEdit(v, region) {
+  const W = v.W, H = v.H, ar = W / H;
+  let best = SIM_SIZES[0]; for (const sz of SIM_SIZES) if (Math.abs(Math.log(sz[1] / ar)) < Math.abs(Math.log(best[1] / ar))) best = sz;
+  const [size, r] = best; let cw = W, ch = H; if (ar > r) ch = Math.round(W / r); else cw = Math.round(H * r);
+  const ox = Math.round((cw - W) / 2), oy = Math.round((ch - H) / 2);
+  const sc = Math.min(1, 1536 / Math.max(cw, ch)), sw = Math.round(cw * sc), sh = Math.round(ch * sc);
+  const c = document.createElement('canvas'); c.width = sw; c.height = sh; const k = c.getContext('2d');
+  k.drawImage(v.before, 0, 0, W, H, 0, 0, sw, sh); k.filter = 'blur(24px)'; k.drawImage(c, 0, 0); k.filter = 'none';
+  k.drawImage(v.before, 0, 0, W, H, ox * sc, oy * sc, W * sc, H * sc);
+  const m = document.createElement('canvas'); m.width = sw; m.height = sh; const mk = m.getContext('2d');
+  mk.fillStyle = '#000'; mk.fillRect(0, 0, sw, sh);
+  if (region) {
+    const pad = 0.04; const rx = (ox + (region.x - pad) * W) * sc, ry = (oy + (region.y - pad) * H) * sc, rw = (region.w + pad * 2) * W * sc, rh = (region.h + pad * 2) * H * sc;
+    mk.globalCompositeOperation = 'destination-out'; mk.beginPath(); mk.roundRect(rx, ry, rw, rh, Math.min(rw, rh) * 0.25); mk.fill(); mk.globalCompositeOperation = 'source-over';
+  }
+  return { image: c.toDataURL('image/jpeg', 0.92), mask: region ? m.toDataURL('image/png') : null, size, crop: { x: ox * sc / sw, y: oy * sc / sh, w: W * sc / sw, h: H * sc / sh } };
+}
+async function simulateAi(v, opts = {}) {
+  if (!v) { alert('Add the patient\'s photo first.'); return false; }
+  if (simBusy) return false;
+  if (!(window.MorphAPI.aiReady && window.MorphAPI.aiReady())) { openAiSettings('claude', 'The AI image simulation needs Claude (to plan from the notes) and an OpenAI key (to paint the image).'); return false; }
+  if (!(aiHealth && aiHealth.openai && aiHealth.openai.ok)) { openAiSettings('openai', 'Add your OpenAI API key: it renders the photorealistic simulation that Claude plans from the notes.'); return false; }
+  const notes = gatherSimNotes(), feedback = gatherSimFeedback(opts.feedback);
+  if (!notes && !feedback) { window.Autopilot && window.Autopilot.say('Nothing to simulate yet: write the plan in “Planned changes” or “Consultation notes”, upload the letter, or type the change here.'); return false; }
+  simBusy = true; renderSimPanel(); renderSimStatus(`Claude is planning the simulation for “${v.name}”…`, true);
+  try {
+    const small = document.createElement('canvas'); const sc = Math.min(1, 1024 / Math.max(v.W, v.H)); small.width = Math.round(v.W * sc); small.height = Math.round(v.H * sc); small.getContext('2d').drawImage(v.before, 0, 0, small.width, small.height);
+    const lm = v.landmarks ? Object.fromEntries(Object.entries(v.landmarks).map(([k, q]) => [k, { x: +(q.x / v.W).toFixed(3), y: +(q.y / v.H).toFixed(3) }])) : null;
+    const planR = await postJSON('api/simulate', { action: 'plan', image: small.toDataURL('image/jpeg', 0.85), view: viewKind(v), name: v.name, width: v.W, height: v.H, notes, feedback, previous: v.ai ? v.ai.prompt : '', landmarks: lm });
+    if (!planR.ok) throw Object.assign(new Error((planR.body && planR.body.message) || `Planning failed (${planR.status})`), { status: planR.status, code: planR.body && planR.body.error });
+    const plan = planR.body;
+    if (!plan.applies) { window.Autopilot && window.Autopilot.say(`“${v.name}”: ${plan.summary || 'nothing in the notes applies to this photo.'}`); renderSimStatus(''); return false; }
+    renderSimStatus(`Painting the photorealistic result for “${v.name}” (usually 20–60 s)…`, true);
+    const prep = padForEdit(v, plan.region);
+    const renderR = await postJSON('api/simulate', { action: 'render', image: prep.image, mask: prep.mask, prompt: plan.edit_prompt, size: prep.size });
+    if (!renderR.ok) throw Object.assign(new Error((renderR.body && renderR.body.message) || `Rendering failed (${renderR.status})`), { status: renderR.status, code: renderR.body && renderR.body.error });
+    const img = await loadDataUrl(renderR.body.image);
+    const c = document.createElement('canvas'); c.width = v.W; c.height = v.H;
+    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    c.getContext('2d').drawImage(img, prep.crop.x * iw, prep.crop.y * ih, prep.crop.w * iw, prep.crop.h * ih, 0, 0, v.W, v.H);
+    v.ai = { canvas: c, summary: plan.summary, prompt: plan.edit_prompt, changes: plan.changes, region: plan.region, at: new Date().toISOString(), model: renderR.body.model || '' };
+    state.showAi = true; state.currentVersion = null;
+    renderSimStatus(''); renderSimPanel(); renderVersions(); draw(); markDirty();
+    const changes = (plan.changes || []).map(ch => `${ch.target}: ${ch.action} ${ch.amount}`.trim()).join('; ');
+    if (window.Autopilot) window.Autopilot.say(`AI image simulation ready for “${v.name}”. ${plan.summary}${changes ? `\n${changes}` : ''}${plan.unclear ? `\nPlease confirm: ${plan.unclear}` : ''}\nSave it as a Morph to keep this option.`);
+    setStatus(`AI image simulation ready for “${v.name}” — compare with the slider or side by side`);
+    return true;
+  } catch (e) {
+    renderSimStatus('');
+    const msg = e.message || String(e);
+    if (e.code === 'no_openai_key' || e.code === 'bad_openai_key') openAiSettings('openai', msg); else if (e.code === 'no_key' || e.code === 'bad_key') openAiSettings('claude', msg);
+    if (window.Autopilot) window.Autopilot.say(`The AI image simulation failed: ${msg}`); setStatus(`AI image simulation failed: ${msg}`);
+    return false;
+  } finally { simBusy = false; renderSimPanel(); }
+}
+async function simulateAllAi() { for (const v of state.views) { if (simBusy) break; await simulateAi(v); } }
+$('#apSimulate').addEventListener('click', () => simulateAi(currentView()));
+$('#apSimulateAll').addEventListener('click', simulateAllAi);
+$('#apShowAi').addEventListener('change', () => { state.showAi = $('#apShowAi').checked; draw(); markDirty(); });
+window.MorphAPI.aiImageMode = () => !!(aiHealth && aiHealth.openai && aiHealth.openai.ok && state.showAi && !is3d() && currentView());
+window.MorphAPI.simulateFeedback = text => simulateAi(currentView(), { feedback: text });
+window.MorphAPI.simulateAi = simulateAi;
+
 function serialize() {
   return {
     app: 'morph-studio', version: 1, savedAt: new Date().toISOString(),
     patient: { ...state.patient }, notes: { ...state.notes },
     docs: state.docs.map(d => ({ ...d })),
-    views: state.views.map(v => ({ name: v.name, W: v.W, H: v.H, image: v.before.toDataURL('image/jpeg', 0.92), disp: encodeDisp(v), pins: v.pins.map(p => ({ ...p })), landmarks: v.landmarks ? JSON.parse(JSON.stringify(v.landmarks)) : null, kind: v.kind || '', mm: v.mm || 0, lmStatus: v.lmStatus || '', lmSource: v.lmSource || '', surgeon: v.surgeon ? { name: v.surgeon.name, image: v.surgeon.canvas.toDataURL('image/jpeg', 0.92) } : null })),
+    showAi: state.showAi,
+    views: state.views.map(v => ({ name: v.name, W: v.W, H: v.H, image: v.before.toDataURL('image/jpeg', 0.92), disp: encodeDisp(v), pins: v.pins.map(p => ({ ...p })), landmarks: v.landmarks ? JSON.parse(JSON.stringify(v.landmarks)) : null, kind: v.kind || '', mm: v.mm || 0, lmStatus: v.lmStatus || '', lmSource: v.lmSource || '', surgeon: v.surgeon ? { name: v.surgeon.name, image: v.surgeon.canvas.toDataURL('image/jpeg', 0.92) } : null, ai: v.ai ? aiToJSON(v.ai, 0.92) : null })),
     chat: state.chat || [],
     versions: serializeVersions(), usePlaceholder: !!state.usePlaceholder,
     avatar: avatarInited ? AV().serialize(v => state.views.indexOf(v)) : (pendingAvatar || null),
@@ -1373,6 +1481,7 @@ async function restore(data) {
     v.pins = (d.pins || []).map(p => ({ x: +p.x || 0, y: +p.y || 0, text: String(p.text || '') }));
     if (d.landmarks && typeof d.landmarks === 'object') { v.landmarks = {}; for (const [k, q] of Object.entries(d.landmarks)) if (LM_NAMES.includes(k) && q && isFinite(q.x) && isFinite(q.y)) v.landmarks[k] = { x: +q.x, y: +q.y }; if (!Object.keys(v.landmarks).length) v.landmarks = null; }
     v.kind = ['front', 'profile', 'other'].includes(d.kind) ? d.kind : ''; v.mm = +d.mm || 0; v.lmStatus = d.lmStatus || (v.landmarks ? 'auto' : ''); v.lmSource = d.lmSource || '';
+    if (d.ai && typeof d.ai.image === 'string' && d.ai.image.startsWith('data:')) { try { v.ai = await aiFromJSON(v, d.ai); } catch { /* skip a broken image */ } }
     if (d.surgeon && typeof d.surgeon.image === 'string' && d.surgeon.image.startsWith('data:')) { try { const si = await loadDataUrl(d.surgeon.image); const c = document.createElement('canvas'); c.width = v.W; c.height = v.H; c.getContext('2d').drawImage(si, 0, 0, v.W, v.H); v.surgeon = { canvas: c, name: String(d.surgeon.name || 'Surgeon\'s image') }; } catch { /* skip a broken image */ } }
     renderAll(v);
     state.views.push(v);
@@ -1382,7 +1491,7 @@ async function restore(data) {
   if (avatarInited) { await AV().restore(pendingAvatar, i => state.views[i] || null); pendingAvatar = null; if (is3d()) autoAssignRoles(); }
   state.chat = Array.isArray(data.chat) ? data.chat : [];
   state.versions = (Array.isArray(data.versions) ? data.versions : []).filter(v => v && v.name).map(v => ({ id: v.id || 'ver-' + Math.random().toString(36).slice(2), name: String(v.name), at: v.at || new Date().toISOString(), note: String(v.note || ''), threeD: v.threeD || null, views: Array.isArray(v.views) ? v.views : [] }));
-  state.currentVersion = null; state.referenceVersion = null; state.views.forEach(v => { v.refCanvas = null; }); state.usePlaceholder = !!data.usePlaceholder;
+  state.currentVersion = null; state.referenceVersion = null; state.views.forEach(v => { v.refCanvas = null; }); state.usePlaceholder = !!data.usePlaceholder; state.showAi = data.showAi !== false; renderSimPanel();
   renderVersions();
   if (window.MorphAPI.loadChat) window.MorphAPI.loadChat(state.chat);
   syncFields(); renderTabs(); renderPinList(); updateHistoryButtons(); setMorph(1, false); fit(); draw(); renderApLandmarks(); renderGen3d();
@@ -1477,7 +1586,7 @@ $('#btnExport').addEventListener('click', () => {
   }
   const v = currentView(); if (!v) return alert('Add a photo first.');
   if (state.morph < 1) { setMorph(1, true); draw(); }
-  let b = v.before, a = v.after, sg = v.surgeon ? v.surgeon.canvas : null;
+  let b = v.before, a = afterImg(v), sg = v.surgeon ? v.surgeon.canvas : null;
   if (state.grid) { const withGrid = src => { const c = document.createElement('canvas'); c.width = v.W; c.height = v.H; const k = c.getContext('2d'); k.drawImage(src, 0, 0); drawGrid(v, 0, k, 1); return c; }; b = withGrid(v.before); a = withGrid(v.after); if (sg) sg = withGrid(sg); }
   composeSheet(b, a, v.name, `morph_${fileStem()}_${v.name.replace(/[^\w-]+/g, '_')}.png`, sg);
   setStatus('Before / after image downloaded');
@@ -1523,7 +1632,7 @@ $('#btnPrint').addEventListener('click', () => {
   for (const v of state.views) {
     html += `<section class="print-view"><h2>${esc(v.name)}</h2><div class="pair">
       <figure><img src="${v.before.toDataURL('image/jpeg', 0.9)}" alt="Before"><figcaption>Before</figcaption></figure>
-      <figure><img src="${v.after.toDataURL('image/jpeg', 0.9)}" alt="Simulated after"><figcaption>${v.surgeon ? 'Simulated (platform)' : 'Simulated after'}</figcaption></figure>${v.surgeon ? `<figure><img src="${v.surgeon.canvas.toDataURL('image/jpeg', 0.9)}" alt="Surgeon's simulation"><figcaption>Surgeon's simulation (${esc(v.surgeon.name)})</figcaption></figure>` : ''}</div>`;
+      <figure><img src="${afterImg(v).toDataURL('image/jpeg', 0.9)}" alt="Simulated after"><figcaption>${v.surgeon ? 'Simulated (platform)' : 'Simulated after'}${state.showAi && v.ai ? ' — AI image' : ''}</figcaption></figure>${v.surgeon ? `<figure><img src="${v.surgeon.canvas.toDataURL('image/jpeg', 0.9)}" alt="Surgeon's simulation"><figcaption>Surgeon's simulation (${esc(v.surgeon.name)})</figcaption></figure>` : ''}</div>`;
     if (v.pins.length) html += `<ol>${v.pins.map(p => `<li>${esc(p.text) || '<em>(no text)</em>'}</li>`).join('')}</ol>`;
     html += '</section>';
   }

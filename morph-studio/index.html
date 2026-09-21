@@ -197,6 +197,15 @@
     <h3>AI autopilot <span class="count" id="apEngine"></span></h3>
     <div class="ap">
       <div class="ap-banner" id="apBanner" hidden></div>
+      <div class="ap-sim only-2d" id="apSim">
+        <div class="row">
+          <button id="apSimulate" class="primary" title="Claude reads the notes and this photo, then the image model paints the photorealistic simulation">Generate AI image simulation</button>
+          <button id="apSimulateAll" title="Run the AI image simulation on every photo of this case">All photos</button>
+        </div>
+        <label class="check" id="apShowAiWrap" hidden><input type="checkbox" id="apShowAi" checked> Show the AI image as the simulated result</label>
+        <div class="ap-sim-status" id="apSimStatus" hidden></div>
+        <p class="hint" id="apSimHint">Uses “Planned changes”, “Consultation notes”, uploaded letters and the conversation below. Feedback typed below (“a bit less on the tip”) re-renders the image.</p>
+      </div>
       <div class="ap-log" id="apLog"></div>
       <div class="ap-status" id="apStatus"></div>
       <textarea id="apInput" rows="2" placeholder="e.g. Reduce the dorsal hump by 2 mm and rotate the tip up 5°. Or patient feedback: the tip looks too upturned — a bit less."></textarea>
@@ -308,15 +317,18 @@
 <div class="modal" id="aiModal" hidden>
   <div class="modal-card ai-card">
     <h2>AI settings</h2>
-    <p class="hint">The platform's AI (autopilot, reading notes) runs on Claude. Paste your Claude API key once; it is kept in this browser only and sent to this app's own server functions with each AI request. Get a key at <strong>console.anthropic.com</strong> → API keys.</p>
+    <p class="hint">Claude reads the notes, the photos and the feedback and plans the simulation; OpenAI's image model paints the photorealistic result. Paste the keys once; they are kept in this browser only and sent to this app's own server functions with each AI request. Claude key: <strong>console.anthropic.com</strong> → API keys. OpenAI key: <strong>platform.openai.com</strong> → API keys.</p>
     <p class="ai-note" id="aiNote" hidden></p>
     <label for="aiClaudeKey">Claude API key</label>
     <div class="row keyrow"><input id="aiClaudeKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…"><button id="aiShow" type="button" title="Show / hide">👁</button></div>
     <div class="ai-status" id="aiClaudeStatus"></div>
+    <label for="aiOpenaiKey">OpenAI API key <span class="count">(for the photorealistic AI image simulation — gpt-image-1)</span></label>
+    <div class="row keyrow"><input id="aiOpenaiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-… from platform.openai.com → API keys"></div>
+    <div class="ai-status" id="aiOpenaiStatus"></div>
     <label for="aiMeshyKey">Meshy API key <span class="count">(optional — only for generating the patient's 3D model)</span></label>
     <div class="row keyrow"><input id="aiMeshyKey" type="password" autocomplete="off" spellcheck="false" placeholder="from meshy.ai → API"></div>
     <div class="ai-status" id="aiMeshyStatus"></div>
-    <p class="hint">For a clinic-wide setup an administrator can instead set <code>ANTHROPIC_API_KEY</code> and <code>MESHY_API_KEY</code> in the Vercel project's environment variables; keys set there take priority and nothing needs to be entered here.</p>
+    <p class="hint">For a clinic-wide setup an administrator can instead set <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code> and <code>MESHY_API_KEY</code> in the Vercel project's environment variables; keys set there take priority and nothing needs to be entered here.</p>
     <div class="modal-row">
       <button id="aiRemove" class="danger">Remove keys from this browser</button>
       <span class="spacer"></span>

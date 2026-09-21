@@ -307,6 +307,7 @@ async function handle(userText, source) {
   add('user', source ? `${source}\n${text.length > 700 ? text.slice(0, 700) + ' …' : text}` : text);
   try {
     if (/^\s*(undo|undo that|undo last|go back)\s*[.!]?\s*$/i.test(text)) { undoStep(); add('assistant', 'Undone.'); return; }
+    const aiMode = !!(window.MorphAPI.aiImageMode && window.MorphAPI.aiImageMode());
     let plan = null;
     try { plan = await askServer(text, /^Notes from|^Planned changes:|^Consultation notes:/.test(source || '')); } catch (e) { plan = null; chat.engine = 'built-in parser (AI service unreachable)'; }
     let ops, reply;
@@ -315,12 +316,14 @@ async function handle(userText, source) {
       chat.engine = chat.engine || 'built-in parser — connect Claude in AI settings for full understanding';
       ops = parseRelative(text, chat.steps) || parseLocal(text).ops; reply = '';
     }
+    if (!ops.length && aiMode) { await window.MorphAPI.simulateFeedback(text); return; }
     if (!ops.length) { add('assistant', reply || 'I could not find a change to make in that. Try something like “reduce the dorsal hump by 2 mm”, “rotate the tip up 5°”, “narrow the alar base 3 mm”, “augment the chin 4 mm”, or “a bit less on the tip”.'); return; }
     const out = applyOps(ops);
     if (out.targets.length) chat.steps.push({ ops: out.ops, targets: out.targets });
     const html = `${reply ? esc(reply).replace(/\n/g, '<br>') + '<br>' : ''}<ul>${out.ops.map(o => `<li>${esc(describeOp(o))}</li>`).join('')}</ul><div class="ap-res">${out.results.map(esc).join('<br>')}</div>`;
     add('assistant', reply + '\n' + out.ops.map(describeOp).join('; ') + '\n' + out.results.join(' '), html);
     window.MorphAPI.markDirty();
+    if (aiMode) await window.MorphAPI.simulateFeedback(text);           // photorealistic image follows the same instruction
   } catch (e) { add('assistant', 'Something went wrong: ' + (e.message || e)); }
   finally { chat.busy = false; el.send.disabled = false; el.status.textContent = ''; }
 }

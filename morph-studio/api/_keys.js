@@ -16,3 +16,10 @@ export function meshyKey(req) {
   if (/^[\w-]{16,}$/.test(h)) return { key: h, source: 'browser' };
   return { key: '', source: 'none' };
 }
+export function openaiKey(req) {
+  const env = process.env.OPENAI_API_KEY;
+  if (env) return { key: env, source: 'server' };
+  const h = String(req.headers['x-openai-key'] || '').trim();
+  if (/^sk-[\w-]{20,}$/.test(h)) return { key: h, source: 'browser' };
+  return { key: '', source: 'none' };
+}

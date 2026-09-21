@@ -203,6 +203,15 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
 
 /* AI autopilot */
 .ap { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fbfcfd; }
+.ap-sim { border: 1px solid #b7e0c3; background: #f3faf5; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.ap-sim .row { margin-bottom: 4px; display: flex; gap: 6px; }
+.ap-sim .row button { white-space: normal; line-height: 1.25; }
+#apSimulate { flex: 2; }
+#apSimulateAll { flex: 1; }
+.ap-sim .hint { margin: 4px 0 0; font-size: 11px; }
+.ap-sim-status { font-size: 12px; color: #1a5c2c; padding: 4px 0; }
+.ap-sim-status.busy::before { content: ""; display: inline-block; width: 10px; height: 10px; border: 2px solid #1a5c2c; border-right-color: transparent; border-radius: 50%; margin-right: 6px; vertical-align: -1px; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .ap-log { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
 .ap-log .hint { margin: 0; }
 .ap-msg { font-size: 13px; line-height: 1.4; padding: 8px 10px; border-radius: 10px; background: #fff; border: 1px solid var(--line); }
