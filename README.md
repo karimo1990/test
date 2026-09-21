@@ -180,6 +180,13 @@ Live at **https://morph-studio-two.vercel.app** (Vercel, built from this branch)
 `morph-studio/index.html` locally in a modern browser (Chrome, Edge, Safari, Firefox; works on
 an iPad). Nothing is uploaded anywhere — photos, edits and notes stay on the device.
 
+**Symmetry grid & mirror** — a *Symmetry grid* toggle overlays the facial midline, horizontal
+thirds, vertical fifths and the nose axis (with its deviation from the midline) on front views,
+and the facial vertical, E-line and nasolabial angle on profiles, on both before and after,
+in 2D and as planes on the 3D model. The *Mirror* comparison shows left–left and right–right
+composites of the face (photos) and a depth-tested mirrored ghost on the 3D model, so
+asymmetry before and after is visible at a glance.
+
 **Photo morph** — upload the patient's photos (front, profiles), then sculpt the planned
 change directly on the photo with Push / Reduce / Augment / Restore brushes. Compare with a
 slider, side by side, a fade, a morph animation, or by holding *Space* to peek at the original.

@@ -43,6 +43,7 @@ const state = {
   divider: 0.5,
   fade: 1,
   zoom: 1, panX: 0, panY: 0,
+  grid: false,
   showBefore: false,
   selectedPin: -1,
   mode: '2d',
@@ -81,7 +82,7 @@ async function ensureAvatar() {
     A.onMeasure = () => renderMeasures();
     A.onLandmarks = () => { renderApLandmarks(); renderLmPrompt(); };
     A.init(el.stage);
-    A.brush = +el.brush3d.value / 100; A.strength = state.strength / 100; A.symmetry = el.symmetry.checked;
+    A.brush = +el.brush3d.value / 100; A.strength = state.strength / 100; A.symmetry = el.symmetry.checked; A.setGrid(state.grid);
     renderModelPanel(); renderMeasures(); updateBrushLabel();
   }
   return AV();
@@ -244,7 +245,57 @@ function afterEdit() { setMorph(1, false); updateHistoryButtons(); draw(); markD
 /* ───────────────────────── Display ───────────────────────── */
 const sideGap = v => Math.round(v.W * SIDE_GAP);
 const afterOffset = v => (state.compare === 'side' && !state.showBefore ? v.W + sideGap(v) : 0);
-function contentSize(v) { return state.compare === 'side' ? { w: v.W * 2 + sideGap(v), h: v.H } : { w: v.W, h: v.H }; }
+/* ── Facial grid & mirror composites ── */
+function gridGeometry(v) {
+  const lm = v.landmarks || {}, kind = viewKind(v), W = v.W, H = v.H;
+  if (kind === 'profile') {
+    const noseSign = lm.pronasale && lm.nasion ? Math.sign(lm.pronasale.x - lm.nasion.x) || 1 : 1;
+    return { kind, midX: lm.nasion ? lm.nasion.x : W / 2, levels: [['Nasion', lm.nasion], ['Tip', lm.pronasale], ['Subnasale', lm.subnasale], ['Chin', lm.pogonion]].filter(l => l[1]).map(([n, p]) => [n, p.y]), eline: lm.pronasale && lm.pogonion ? [lm.pronasale, lm.pogonion] : null, nla: lm.pronasale && lm.subnasale ? { s: lm.subnasale, t: lm.pronasale, lip: { x: lm.subnasale.x - noseSign * 0.05 * (v.mm ? viewPxPerMm(v) * 4 : 0), y: lm.subnasale.y + (viewPxPerMm(v) || 4) * 11 } } : null };
+  }
+  const pl = lm.pupil_l, pr = lm.pupil_r;
+  const mid = pl && pr ? { x: (pl.x + pr.x) / 2, y: (pl.y + pr.y) / 2 } : { x: W / 2, y: H * 0.42 };
+  const ang = pl && pr ? Math.atan2(pl.y - pr.y, pl.x - pr.x) : 0;             // tilt of the interpupillary line
+  const ipd = pl && pr ? Math.hypot(pl.x - pr.x, pl.y - pr.y) : W * 0.3, ew = ipd / 2;
+  const along = (p, d) => ({ x: mid.x + Math.cos(ang) * d, y: mid.y + Math.sin(ang) * d }); // along the pupil line
+  const up = { x: -Math.sin(ang), y: Math.cos(ang) };                                       // facial vertical (down in image)
+  const levelAt = p => p ? (p.x - mid.x) * up.x + (p.y - mid.y) * up.y : null;               // signed distance below the pupil line
+  const levels = [['Brow', lm.nasion ? levelAt(lm.nasion) - ipd * 0.18 : -ipd * 0.35], ['Pupils', 0], ['Subnasale', levelAt(lm.subnasale)], ['Stomion', lm.subnasale && lm.pogonion ? levelAt(lm.subnasale) + (levelAt(lm.pogonion) - levelAt(lm.subnasale)) * 0.35 : null], ['Menton', lm.pogonion ? levelAt(lm.pogonion) + ipd * 0.12 : null]].filter(l => l[1] != null);
+  const nose = lm.nasion && lm.pronasale && lm.subnasale ? [lm.nasion, lm.pronasale, lm.subnasale] : null;
+  let deviation = null;
+  if (nose) { const dx = (lm.subnasale.x - lm.nasion.x), dy = (lm.subnasale.y - lm.nasion.y); const a = Math.atan2(dx * up.y - dy * up.x, dx * up.x + dy * up.y); deviation = a * 180 / Math.PI; }
+  return { kind, mid, ang, ew, up, along, levels, fifths: [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5], nose, deviation };
+}
+function drawGrid(v, ox, c = ctx, z = state.zoom) {
+  const g = gridGeometry(v), W = v.W, H = v.H, L = Math.hypot(W, H);
+  c.save(); c.translate(ox, 0);
+  c.lineWidth = 1 / z; c.font = `600 ${11 / z}px ${getComputedStyle(document.body).fontFamily}`; c.textBaseline = 'middle';
+  const label = (text, x, y, align = 'left') => { const tw = c.measureText(text).width + 8 / z; const lx = align === 'left' ? x : x - tw; c.fillStyle = 'rgba(22,33,46,.75)'; c.fillRect(lx, y - 8 / z, tw, 16 / z); c.fillStyle = '#bff3f5'; c.fillText(text, lx + 4 / z, y); };
+  const line = (a, b, color = 'rgba(79,224,230,.85)', dash = []) => { c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.setLineDash(dash.map(d => d / z)); c.strokeStyle = color; c.stroke(); c.setLineDash([]); };
+  if (g.kind === 'profile') {
+    line({ x: g.midX, y: 0 }, { x: g.midX, y: H }, 'rgba(79,224,230,.6)', [6, 4]); label('Facial vertical', g.midX + 4 / z, 14 / z);
+    for (const [n, y] of g.levels) { line({ x: 0, y }, { x: W, y }, 'rgba(79,224,230,.55)', [4, 4]); label(n, 6 / z, y); }
+    if (g.eline) { const [t, c] = g.eline; const dx = c.x - t.x, dy = c.y - t.y, k = 0.35; line({ x: t.x - dx * k, y: t.y - dy * k }, { x: c.x + dx * k, y: c.y + dy * k }, 'rgba(255,179,0,.95)'); label('E-line (tip–chin)', (t.x + c.x) / 2 + 6 / z, (t.y + c.y) / 2, 'left'); }
+    if (g.nla) { const { s, t, lip } = g.nla; line(s, t, 'rgba(255,179,0,.9)'); line(s, lip, 'rgba(255,179,0,.9)'); const a1 = Math.atan2(t.y - s.y, t.x - s.x), a2 = Math.atan2(lip.y - s.y, lip.x - s.x); let d = Math.abs(a1 - a2) * 180 / Math.PI; if (d > 180) d = 360 - d; label(`Nasolabial ≈ ${d.toFixed(0)}°`, s.x + 8 / z, s.y + 14 / z); }
+  } else {
+    const { mid, up, along, ew, levels } = g;
+    const vline = d => { const p = along(mid, d); const a = { x: p.x - up.x * L, y: p.y - up.y * L }, b = { x: p.x + up.x * L, y: p.y + up.y * L }; return [a, b]; };
+    for (const k of g.fifths) { const [a, b] = vline(k * ew); line(a, b, 'rgba(79,224,230,.4)', [4, 4]); }
+    const [ma, mb] = vline(0); line(ma, mb, 'rgba(79,224,230,.95)'); label('Midline', mid.x + 4 / z, 14 / z);
+    for (const [n, d] of levels) { const p = { x: mid.x + up.x * d, y: mid.y + up.y * d }; const a = { x: p.x - Math.cos(g.ang) * L, y: p.y - Math.sin(g.ang) * L }, b = { x: p.x + Math.cos(g.ang) * L, y: p.y + Math.sin(g.ang) * L }; line(a, b, 'rgba(79,224,230,.55)', [4, 4]); label(n, 6 / z, p.y + (6 / z - mid.x * Math.tan(g.ang))); }
+    if (g.nose) { const [n, t, s] = g.nose; line(n, t, 'rgba(255,179,0,.95)'); line(t, s, 'rgba(255,179,0,.95)'); label(`Nose axis ${g.deviation >= 0 ? '→' : '←'} ${Math.abs(g.deviation).toFixed(1)}° off midline`, t.x + 10 / z, t.y); }
+  }
+  c.restore();
+}
+function mirrorComposites(v, src) {
+  // Left–left and right–right halves of the face around the midline x (upright approximation).
+  const g = gridGeometry(v), mx = Math.round(g.kind === 'profile' ? v.W / 2 : g.mid.x), W = v.W, H = v.H;
+  const make = leftSide => { const c = document.createElement('canvas'); c.width = W; c.height = H; const k = c.getContext('2d');
+    if (leftSide) { k.drawImage(src, 0, 0, mx, H, 0, 0, mx, H); k.save(); k.translate(mx * 2, 0); k.scale(-1, 1); k.drawImage(src, 0, 0, mx, H, 0, 0, mx, H); k.restore(); }
+    else { k.drawImage(src, mx, 0, W - mx, H, mx, 0, W - mx, H); k.save(); k.translate(mx * 2, 0); k.scale(-1, 1); k.drawImage(src, mx, 0, W - mx, H, mx, 0, W - mx, H); k.restore(); }
+    return c; };
+  return [make(true), make(false)];
+}
+function contentSize(v) { return (state.compare === 'side' || state.compare === 'mirror') ? { w: v.W * 2 + sideGap(v), h: v.H } : { w: v.W, h: v.H }; }
 
 function resizeCanvas() {
   const r = el.stage.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
@@ -284,8 +335,9 @@ function draw() {
   ctx.save();
   ctx.translate(panX, panY); ctx.scale(zoom, zoom);
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-  const mode = state.showBefore ? 'before' : state.compare;
+  let mode = state.showBefore ? 'before' : state.compare;
   const labels = [];
+  if (state.showBefore && state.compare === 'mirror') { const [ll, rr] = mirrorComposites(v, v.before); ctx.drawImage(ll, 0, 0); ctx.drawImage(rr, W + sideGap(v), 0); labels.push(['Original left–left', 0, 'left'], ['Original right–right', W + sideGap(v), 'left']); mode = 'mirror-before'; }
   const beforeImg = v.refCanvas || v.before, beforeLabel = v.refCanvas ? (state.referenceVersion ? state.referenceVersion.name : 'Reference') : 'Before';
   if (mode === 'before') { ctx.drawImage(beforeImg, 0, 0); labels.push([v.refCanvas ? beforeLabel : 'Original', 0, 'left']); }
   else if (mode === 'after') { ctx.drawImage(v.after, 0, 0); labels.push(['Simulated', W, 'right']); }
@@ -297,12 +349,17 @@ function draw() {
     ctx.drawImage(beforeImg, 0, 0);
     ctx.drawImage(v.after, W + sideGap(v), 0);
     labels.push([beforeLabel, 0, 'left'], ['Simulated after', W + sideGap(v), 'left']);
+  } else if (mode === 'mirror') {
+    const [ll, rr] = mirrorComposites(v, v.after);
+    ctx.drawImage(ll, 0, 0); ctx.drawImage(rr, W + sideGap(v), 0);
+    labels.push(['Left–left composite', 0, 'left'], ['Right–right composite', W + sideGap(v), 'left']);
   } else {
     const sx = state.divider * W;
     ctx.save(); ctx.beginPath(); ctx.rect(0, 0, sx, H); ctx.clip(); ctx.drawImage(beforeImg, 0, 0); ctx.restore();
     ctx.save(); ctx.beginPath(); ctx.rect(sx, 0, W - sx, H); ctx.clip(); ctx.drawImage(v.after, 0, 0); ctx.restore();
     labels.push([beforeLabel, 0, 'left'], ['Simulated', W, 'right']);
   }
+  if (state.grid) { drawGrid(v, 0); if (mode === 'side' || mode === 'mirror') drawGrid(v, W + sideGap(v)); }
   if (!state.showBefore) { drawPins(v); if (state.tool === 'landmarks' && v.landmarks) drawLandmarks(v); }
   ctx.restore();
 
@@ -559,6 +616,7 @@ function setCompare(mode) {
   fit();
 }
 el.fade.addEventListener('input', () => { state.fade = +el.fade.value / 100; draw(); });
+$('#gridToggle').addEventListener('change', e => { state.grid = e.target.checked; if (avatarInited) AV().setGrid(state.grid); const v = currentView(); if (v && state.grid && !v.landmarks) { ensureLandmarks(v); renderApLandmarks(); } draw(); });
 
 const peek = $('#btnPeek');
 const setPeek = on => { if (state.showBefore === on) return; state.showBefore = on; if (avatarInited) AV().setShowBefore(on); draw(); };
@@ -694,7 +752,7 @@ function selectView(i) {
   endStroke();
   state.current = i; state.selectedPin = -1;
   const v = currentView();
-  if (v) { setMorph(1, false); renderAll(v); }
+  if (v) { setMorph(1, false); renderAll(v); if (state.grid && !v.landmarks) ensureLandmarks(v); }
   renderTabs(); renderPinList(); updateHistoryButtons(); fit(); renderApLandmarks();
 }
 function removeView(i) {
@@ -1308,7 +1366,9 @@ $('#btnExport').addEventListener('click', () => {
   }
   const v = currentView(); if (!v) return alert('Add a photo first.');
   if (state.morph < 1) { setMorph(1, true); draw(); }
-  composeSheet(v.before, v.after, v.name, `morph_${fileStem()}_${v.name.replace(/[^\w-]+/g, '_')}.png`);
+  let b = v.before, a = v.after;
+  if (state.grid) { const withGrid = src => { const c = document.createElement('canvas'); c.width = v.W; c.height = v.H; const k = c.getContext('2d'); k.drawImage(src, 0, 0); drawGrid(v, 0, k, 1); return c; }; b = withGrid(v.before); a = withGrid(v.after); }
+  composeSheet(b, a, v.name, `morph_${fileStem()}_${v.name.replace(/[^\w-]+/g, '_')}.png`);
   setStatus('Before / after image downloaded');
 });
 function composeSheet(beforeImg, afterImg, label, filename) {
@@ -1539,7 +1599,7 @@ async function setMode(mode) {
     el.canvas.style.display = 'none'; el.divider.hidden = true; A.show(true);
     A.setTool($('#toolGrid3d button.active')?.dataset.tool || 'orbit');
     A.setCompare($('#compare3dSeg button.active')?.dataset.compare || 'after');
-    A.setAutoRotate(el.autoRotate.checked);
+    A.setAutoRotate(el.autoRotate.checked); A.setGrid(state.grid);
     setStatus('3D avatar — drag to rotate, wheel to zoom');
   } else {
     state.mode = '2d'; document.body.dataset.mode = '2d';

@@ -93,6 +93,7 @@ h3:first-child { margin-top: 0; }
 }
 
 /* Compare bar */
+.compare-bar .check { margin: 0; }
 .compare-bar { display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: #fff; border-top: 1px solid var(--line); flex-wrap: wrap; }
 .bar-label { font-size: 12px; font-weight: 600; color: var(--muted); }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }

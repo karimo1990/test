@@ -84,6 +84,7 @@ const A = {
   history: [], redo: [],
   model: null,                       // { kind, name, glb, parts, faces }
   hideModel: false,                  // true while the generic placeholder is not wanted on screen
+  grid: false,                        // facial symmetry grid planes
   mmPerUnit: 117, scaleSource: 'assumed',   // real-world scale of the model
   measures: [], pendingPoint: null,          // distance measurements anchored to vertices
   landmarks: {}, landmarkStep: -1, showLandmarks: false,   // anatomical anchor points {name: {part, vi}}
@@ -92,7 +93,7 @@ const A = {
 };
 let stage, renderer, scene, camera, controls, afterGroup, beforeGroup, ring, pinGroup, off, loopOn = false;
 let genericMaterial, texture, texCanvas, genericGeo;
-let stroke = null, hoverHit = null, measureGroup, ghostMaterial, landmarkGroup;
+let stroke = null, hoverHit = null, measureGroup, ghostMaterial, landmarkGroup, gridGroup, mirrorGroup, mirrorMaterial;
 const raycaster = new THREE.Raycaster();
 const pointerIds = new Set();
 const pinSprites = [];
@@ -133,6 +134,10 @@ A.init = function (stageEl) {
   pinGroup = new THREE.Group(); scene.add(pinGroup);
   measureGroup = new THREE.Group(); scene.add(measureGroup);
   landmarkGroup = new THREE.Group(); scene.add(landmarkGroup);
+  gridGroup = new THREE.Group(); gridGroup.visible = false; scene.add(gridGroup);
+  mirrorGroup = new THREE.Group(); mirrorGroup.visible = false; scene.add(mirrorGroup);
+  // Depth-tested: the amber ghost only shows where the mirrored side protrudes beyond the real one — an asymmetry map.
+  mirrorMaterial = new THREE.MeshBasicMaterial({ color: 0xffb300, transparent: true, opacity: 0.55, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
   ghostMaterial = new THREE.MeshBasicMaterial({ color: 0x1fb6c1, transparent: true, opacity: 0.32, depthWrite: false, side: THREE.DoubleSide });
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -206,7 +211,7 @@ function useGenericModel() {
   A.mmPerUnit = 117; A.scaleSource = 'assumed'; clearMeasures();
   autoLandmarksGeneric();
   afterGroup.add(part.mesh); beforeGroup.add(part.beforeMesh);
-  bake();
+  bake(); rebuildMirror(); rebuildGrid();
   A.onModel(); A.onHistory(); A.onPins(false);
 }
 /* Load a GLB/GLTF (ArrayBuffer). The model is centred, scaled to head units and made sculptable. */
@@ -243,8 +248,9 @@ A.loadGLB = function (buffer, name = 'model.glb') {
         });
         let faces = 0; newParts.forEach(p => { faces += p.geo.index.count / 3; afterGroup.add(p.mesh); beforeGroup.add(p.beforeMesh); });
         A.model = { kind: 'glb', name, glb: buffer, parts: newParts, faces, turns: [] };
+        rebuildMirror();
         A.mmPerUnit = mmPerUnit; A.scaleSource = scaleSource; clearMeasures();
-        guessLandmarksGLB();
+        guessLandmarksGLB(); rebuildGrid();
         A.resetView();
         A.onModel(); A.onHistory(); A.onPins(false); A.onDirty();
         resolve(A.model);
@@ -355,7 +361,8 @@ function updatePins() {
 function frame() {
   controls.autoRotate = A.autoRotate;
   controls.update();
-  updatePins(); updateMeasures(); updateLandmarkSprites(); stepAnimation();
+  updatePins(); updateMeasures(); updateLandmarkSprites(); stepAnimation(); syncMirror();
+  gridGroup.visible = A.grid && !A.hideModel;
   measureGroup.visible = !A.showBefore;
   landmarkGroup.visible = !A.showBefore && (A.showLandmarks || A.tool === 'landmark');
   const w = renderer.domElement.width / renderer.getPixelRatio(), h = renderer.domElement.height / renderer.getPixelRatio();
@@ -374,6 +381,13 @@ function frame() {
     beforeGroup.visible = !showAfter; afterGroup.visible = showAfter; pinGroup.visible = showAfter;
     ring.visible = showAfter && !!hoverHit && isSculpt() && !stroke;
     renderer.setViewport(0, 0, w, h); renderer.render(scene, camera);
+    if (A.compare === 'mirror' && showAfter && parts().length) {
+      // Mirror image of the simulated face across the facial midline, drawn as an amber ghost.
+      const savedClear = renderer.autoClear;
+      afterGroup.visible = false; beforeGroup.visible = false; pinGroup.visible = false; measureGroup.visible = false; landmarkGroup.visible = false; ring.visible = false; gridGroup.visible = false;
+      mirrorGroup.visible = true; renderer.autoClear = false; renderer.render(scene, camera);
+      mirrorGroup.visible = false; renderer.autoClear = savedClear; gridGroup.visible = A.grid;
+    }
     if (A.compare === 'ghost' && showAfter) {
       // Translucent overlay of the original shape over the simulated result.
       const savedOverride = scene.overrideMaterial, savedClear = renderer.autoClear;
@@ -868,7 +882,7 @@ function placeLandmark(part, vi) {
   if (!name) return;
   A.landmarks[name] = { part, vi };
   if (A.landmarkStep >= 0) { A.landmarkStep++; if (A.landmarkStep >= LANDMARK_NAMES.length) A.landmarkStep = -1; }
-  rebuildLandmarkSprites(); A.onLandmarks(); A.onDirty();
+  rebuildLandmarkSprites(); if (A.grid) rebuildGrid(); A.onLandmarks(); A.onDirty();
 }
 A.pickNearestLandmarkName = function (part, vi) {
   const p = parts()[part], a = p.cur, x = a[vi * 3], y = a[vi * 3 + 1], z = a[vi * 3 + 2];
@@ -945,6 +959,50 @@ A.applyPushes = function (pushes, opts = {}) {
   A.onHistory(); A.onDirty();
   return { applied };
 };
+
+/* ───────────── Symmetry grid & mirror ─────────────
+   Midline x comes from the pupils (fallback: model centre); horizontal levels from the landmarks. */
+function midlineX() { const l = A.landmarkPoint('pupil_l'), r = A.landmarkPoint('pupil_r'); return l && r ? (l.x + r.x) / 2 : 0; }
+function modelBounds() { const box = new THREE.Box3(); parts().forEach(p => { p.geo.computeBoundingBox(); box.union(p.geo.boundingBox); }); return box; }
+function rebuildGrid() {
+  while (gridGroup.children.length) { const o = gridGroup.children.pop(); o.geometry.dispose(); o.material.dispose(); }
+  if (!parts().length) return;
+  const box = modelBounds(), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+  const mx = midlineX();
+  const planeMat = new THREE.MeshBasicMaterial({ color: 0x4fe0e6, transparent: true, opacity: 0.09, depthWrite: false, side: THREE.DoubleSide });
+  const lineMat = new THREE.LineBasicMaterial({ color: 0x4fe0e6, transparent: true, opacity: 0.9, depthTest: false });
+  // Sagittal (midline) plane
+  const sag = new THREE.Mesh(new THREE.PlaneGeometry(size.z * 1.15, size.y * 1.1), planeMat); sag.rotation.y = Math.PI / 2; sag.position.set(mx, c.y, c.z); sag.renderOrder = 8; gridGroup.add(sag);
+  const sagEdge = new THREE.LineSegments(new THREE.EdgesGeometry(sag.geometry), lineMat); sagEdge.rotation.y = Math.PI / 2; sagEdge.position.copy(sag.position); sagEdge.renderOrder = 9; gridGroup.add(sagEdge);
+  // Horizontal levels: brow, pupils, subnasale, menton (from landmarks when present)
+  const yOf = n => { const p = A.landmarkPoint(n); return p ? p.y : null; };
+  const pup = yOf('pupil_l') != null && yOf('pupil_r') != null ? (yOf('pupil_l') + yOf('pupil_r')) / 2 : null, sub = yOf('subnasale'), pog = yOf('pogonion'), nas = yOf('nasion');
+  const u = A.mmToUnits(1);
+  const levels = [['Brow', nas != null ? nas + 12 * u : null], ['Pupils', pup], ['Subnasale', sub], ['Menton', pog != null ? pog - 8 * u : null]].filter(l => l[1] != null);
+  for (const [, y] of levels) {
+    const h = new THREE.Mesh(new THREE.PlaneGeometry(size.x * 1.15, size.z * 1.15), planeMat); h.rotation.x = Math.PI / 2; h.position.set(c.x, y, c.z); h.renderOrder = 8; gridGroup.add(h);
+    const e = new THREE.LineSegments(new THREE.EdgesGeometry(h.geometry), lineMat); e.rotation.x = Math.PI / 2; e.position.copy(h.position); e.renderOrder = 9; gridGroup.add(e);
+  }
+  // Vertical fifths (eye-width units) as thin front lines at the tip depth
+  const pl = A.landmarkPoint('pupil_l'), pr = A.landmarkPoint('pupil_r');
+  if (pl && pr) {
+    const ew = Math.abs(pl.x - pr.x) / 2, zf = box.max.z + 0.02, pts = [];
+    for (const k of [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5]) pts.push(new THREE.Vector3(mx + k * ew, box.min.y, zf), new THREE.Vector3(mx + k * ew, box.max.y, zf));
+    const fifths = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x4fe0e6, transparent: true, opacity: 0.45, depthTest: false })); fifths.renderOrder = 9; gridGroup.add(fifths);
+  }
+}
+A.setGrid = on => { A.grid = !!on; if (A.grid) rebuildGrid(); };
+A.refreshGrid = () => { if (A.grid) rebuildGrid(); };
+function rebuildMirror() {
+  while (mirrorGroup.children.length) mirrorGroup.children.pop();
+  for (const p of parts()) { const m = new THREE.Mesh(p.geo, mirrorMaterial); mirrorGroup.add(m); }
+  syncMirror();
+}
+function syncMirror() {
+  if (!mirrorGroup.children.length) return;
+  const mx = midlineX();
+  mirrorGroup.scale.set(-1, 1, 1); mirrorGroup.position.set(2 * mx, 0, 0);
+}
 
 /* ───────────── Versions ("Morph 1", "Morph 2"…) ─────────────
    A version snapshot is the sculpted position array of every part; the reference
